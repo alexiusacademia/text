@@ -7,6 +7,6 @@ tessel = "0.18.0"
 # `tessel add text`, then `import text`.
 [library]
 name = "text"
-version = "0.1.0"
-description = "Text tools: Unicode characters, words and sentences, hyphenation and fuzzy matching"
+version = "0.2.0"
+description = "Text tools: Unicode characters, words and sentences, hyphenation, fuzzy matching, stemming, search and readability"
 license = "MIT"

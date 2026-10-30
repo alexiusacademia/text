@@ -10,5 +10,6 @@
 # Downloaded by tools/fetch.py, and the oracle's Python packages.
 tools/ucd/
 tools/hyph/
+tools/stem/
 tools/oracle/.venv/
 __pycache__/

@@ -1,0 +1,281 @@
+// text: full-text search. A `SearchIndex` holds documents (help pages,
+// notes, file contents, anything with text), and `search` ranks them for a
+// query by BM25, the scoring Lucene and Elasticsearch use: a word counts
+// for more the fewer documents have it, and a document scores higher the
+// more often it has the word, less so the longer the document is.
+//
+// Words are found with `words`, case folded, stopwords ("the", "of",
+// "is"…) left out, and stemmed (`stem`), so "Beams" finds "beam" and
+// "beaming". Scores are the same as Python's bm25s with method "lucene"
+// gives (checked on 300 documents and 400 queries).
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+// A document found by `search`: its number (0 for the first one added,
+// and so on) and its score, higher for better.
+public struct Hit {
+    document: Int = 0
+    score: Float = 0.0
+}
+
+// Snowball's English stopword list (174 words): the words too common to
+// tell documents apart. From snowballstem.org (BSD licence).
+public fn englishStopwords() -> Set<String> {
+    var out: Set<String> = []
+    let list = "i me my myself we our ours ourselves you your yours yourself yourselves he him his himself she her hers herself it its itself they them their theirs themselves what which who whom this that these those am is are was were be been being have has had having do does did doing would should could ought i'm you're he's she's it's we're they're i've you've we've they've i'd you'd he'd she'd we'd they'd i'll you'll he'll she'll we'll they'll isn't aren't wasn't weren't hasn't haven't hadn't doesn't don't didn't won't wouldn't shan't shouldn't can't cannot couldn't mustn't let's that's who's what's here's there's when's where's why's how's a an the and but if or because as until while of at by for with about against between into through during before after above below to from up down in out on off over under again further then once here there when where why how all any both each few more most other some such no nor not only own same so than too very"
+    for w in list.split(" ") {
+        out.insert(w)
+    }
+    out
+}
+
+// Documents and what is needed to rank them. `k1` (how fast more of a
+// word stops counting) and `b` (how much a long document is held back) are
+// BM25's two settings, at Lucene's values. Set `stemming` to false to
+// match whole words only, and `stopwords` to [] to keep every word.
+public struct SearchIndex {
+    k1: Float = 1.2
+    b: Float = 0.75
+    stemming: Bool = true
+    stopwords: Set<String> = englishStopwords()
+    // The number of terms of each document.
+    lengths: [Int] = []
+    // All of them together.
+    total: Int = 0
+    // For each term, the documents that have it (in order) and how many
+    // times each has it.
+    postings: [String: [Int]] = [:]
+    counts: [String: [Int]] = [:]
+    // The terms of each document in order, for phrases.
+    terms: [[String]] = []
+
+    // How many documents there are.
+    fn count() -> Int {
+        lengths.count
+    }
+
+    // The terms `text` is indexed by, in order: its words, case folded,
+    // without stopwords, stemmed.
+    fn termsOf(_ text: String) -> [String] {
+        var out: [String] = []
+        for w in words(text) {
+            let f = caseFold(w).replace("’", with: "'")
+            if stopwords.contains(f) {
+                continue
+            }
+            out.append(if stemming { stem(f) } else { f })
+        }
+        out
+    }
+
+    // Adds a document; gives its number.
+    fn add(_ text: String) -> Int {
+        addTerms(termsOf(text))
+    }
+
+    // Adds a document made of terms already found some other way.
+    fn addTerms(_ list: [String]) -> Int {
+        let doc = lengths.count
+        lengths.append(list.count)
+        total += list.count
+        terms.append(list)
+        var seen: [String: Int] = [:]
+        for t in list {
+            seen[t] = (seen[t] ?? 0) + 1
+        }
+        for (t, n) in seen {
+            if postings[t] == nil {
+                postings[t] = []
+                counts[t] = []
+            }
+            postings[t]?.append(doc)
+            counts[t]?.append(n)
+        }
+        doc
+    }
+
+    // How rare the term is: log(1 + (N − n + 0.5) / (n + 0.5)) for n of N
+    // documents having it.
+    fn idf(_ term: String) -> Float {
+        let n = Float((postings[term] ?? []).count)
+        let all = Float(lengths.count)
+        log(1.0 + (all - n + 0.5) / (n + 0.5))
+    }
+
+    // The documents of `query`, best first, at most `limit` of them; those
+    // that score the same in the order they were added. Each word adds to
+    // a document's score; a "phrase in quotes" must be in the document
+    // with its words one after another (stopwords left out). With
+    // `prefix`, the last word may be the start of a word ("reinf" finds
+    // "reinforcement"), for searching while typing.
+    fn search(_ query: String, limit: Int = 10, prefix: Bool = false) -> [Hit] {
+        // The quoted parts are phrases; the rest are single words.
+        let parts = query.split("\"")
+        var loose: [String] = []
+        var phrases: [[String]] = []
+        for (k, part) in parts.enumerated() {
+            if k % 2 == 1 {
+                let p = termsOf(part)
+                if !p.isEmpty {
+                    phrases.append(p)
+                }
+            } else {
+                for t in termsOf(part) {
+                    loose.append(t)
+                }
+            }
+        }
+        // The last word typed, when it may be cut short.
+        var partial: [String] = []
+        let trimmed = query.trimEnd()
+        if prefix && parts.count % 2 == 1 && trimmed.count == query.count {
+            let ws = words(parts[parts.count - 1])
+            if let last = ws.last {
+                let f = caseFold(last).replace("’", with: "'")
+                partial.append(f)
+                if stemming {
+                    partial.append(stem(f))
+                }
+                if !loose.isEmpty && !stopwords.contains(f) {
+                    loose.removeLast()
+                }
+            }
+        }
+        var all: [String] = []
+        for t in loose {
+            all.append(t)
+        }
+        for p in phrases {
+            for t in p {
+                all.append(t)
+            }
+        }
+        var scores = scoreTerms(all)
+        if !partial.isEmpty {
+            addPrefix(scores, partial)
+        }
+        var hits: [Hit] = []
+        for (doc, s) in scores.enumerated() {
+            if s <= 0.0 {
+                continue
+            }
+            var ok = true
+            for p in phrases {
+                if !hasPhrase(doc, p) {
+                    ok = false
+                    break
+                }
+            }
+            if ok {
+                hits.append(Hit(document: doc, score: s))
+            }
+        }
+        let sorted = hits.sorted(by: { a, b in a.score > b.score })
+        sorted.slice(from: 0, to: limit)
+    }
+
+    // The documents for terms found some other way, best first.
+    fn searchTerms(_ list: [String], limit: Int = 10) -> [Hit] {
+        let scores = scoreTerms(list)
+        var hits: [Hit] = []
+        for (doc, s) in scores.enumerated() {
+            if s > 0.0 {
+                hits.append(Hit(document: doc, score: s))
+            }
+        }
+        hits.sorted(by: { a, b in a.score > b.score }).slice(from: 0, to: limit)
+    }
+
+    // The BM25 score of each document for `list` (each different term
+    // counted once).
+    fn scoreTerms(_ list: [String]) -> [Float] {
+        var scores: [Float] = []
+        for k in 0..lengths.count {
+            scores.append(0.0)
+        }
+        if lengths.isEmpty {
+            return scores
+        }
+        let average = Float(total) / Float(lengths.count)
+        var done: Set<String> = []
+        for t in list {
+            if done.contains(t) {
+                continue
+            }
+            done.insert(t)
+            if let docs = postings[t] {
+                let w = idf(t)
+                let ns = counts[t] ?? []
+                for (k, doc) in docs.enumerated() {
+                    scores[doc] += w * part(Float(ns[k]), Float(lengths[doc]), average)
+                }
+            }
+        }
+        scores
+    }
+
+    // How much a term found `tf` times counts in a document of `length`
+    // terms.
+    fn part(_ tf: Float, _ length: Float, _ average: Float) -> Float {
+        let norm = if average > 0.0 { 1.0 - b + b * length / average } else { 1.0 }
+        tf / (tf + k1 * norm)
+    }
+
+    // Adds to `scores` the best score of the terms starting with one of
+    // `starts`, for each document.
+    fn addPrefix(_ scores: bind [Float], _ starts: [String]) {
+        if lengths.isEmpty {
+            return
+        }
+        let average = Float(total) / Float(lengths.count)
+        var best: [Float] = []
+        for k in 0..lengths.count {
+            best.append(0.0)
+        }
+        for (t, docs) in postings {
+            var found = false
+            for s in starts {
+                if !s.isEmpty && t.hasPrefix(s) {
+                    found = true
+                }
+            }
+            if !found {
+                continue
+            }
+            let w = idf(t)
+            let ns = counts[t] ?? []
+            for (k, doc) in docs.enumerated() {
+                let s = w * part(Float(ns[k]), Float(lengths[doc]), average)
+                if s > best[doc] {
+                    best[doc] = s
+                }
+            }
+        }
+        for k in 0..best.count {
+            scores[k] += best[k]
+        }
+    }
+
+    // Whether document `doc` has the terms of `phrase` one after another.
+    fn hasPhrase(_ doc: Int, _ phrase: [String]) -> Bool {
+        let ts = terms[doc]
+        let n = phrase.count
+        if n > ts.count {
+            return false
+        }
+        for start in 0..(ts.count - n + 1) {
+            var all = true
+            for k in 0..n {
+                if ts[start + k] != phrase[k] {
+                    all = false
+                    break
+                }
+            }
+            if all {
+                return true
+            }
+        }
+        false
+    }
+}

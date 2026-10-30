@@ -1,0 +1,371 @@
+// text: the English (Porter2) stemmer of Snowball: words cut to a common
+// stem, so that "beams", "beamed" and "beaming" are all "beam" and a
+// search for one finds the others. A stem isn't always a word
+// ("generalization" → "general", "happiness" → "happi"); compare stems
+// with stems. Checked on all 42,649 words of Snowball's test list.
+//
+// This follows english.sbl of Snowball 3 step by step; the comments name
+// its routines. R1 is the part of the word after its first non-vowel that
+// follows a vowel, R2 the same taken again inside R1.
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+// The words the algorithm leaves alone or changes in its own way.
+fn stemException(_ w: String) -> String? {
+    match w {
+        "skis" -> "ski"
+        "skies" -> "sky"
+        "idly" -> "idl"
+        "gently" -> "gentl"
+        "ugly" -> "ugli"
+        "early" -> "earli"
+        "only" -> "onli"
+        "singly" -> "singl"
+        "sky", "news", "howe", "atlas", "cosmos", "bias", "andes" -> w
+        _ -> nil
+    }
+}
+
+// a e i o u y (not Y, which marks a y used as a consonant).
+fn stemVowel(_ ch: String) -> Bool {
+    ch == "a" || ch == "e" || ch == "i" || ch == "o" || ch == "u" || ch == "y"
+}
+
+// Whether the characters from..to have a vowel.
+fn stemHasVowel(_ cs: [String], _ from: Int, _ to: Int) -> Bool {
+    var k = from
+    while k < to {
+        if stemVowel(cs[k]) {
+            return true
+        }
+        k += 1
+    }
+    false
+}
+
+// The place after the first vowel from `from` on and the non-vowel after
+// it, or -1.
+fn stemRegion(_ cs: [String], _ from: Int) -> Int {
+    let n = cs.count
+    var k = from
+    while k < n && !stemVowel(cs[k]) {
+        k += 1
+    }
+    if k >= n {
+        return -1
+    }
+    k += 1
+    while k < n && stemVowel(cs[k]) {
+        k += 1
+    }
+    if k >= n {
+        return -1
+    }
+    k + 1
+}
+
+// shortv: whether the first `end` characters end in a short syllable: a
+// non-vowel, a vowel, and a non-vowel other than w, x and Y; or a vowel and
+// a non-vowel that are the whole word; or "past".
+fn stemShort(_ cs: [String], _ end: Int) -> Bool {
+    if end >= 3 {
+        let last = cs[end - 1]
+        if !stemVowel(last) && last != "w" && last != "x" && last != "Y" && stemVowel(cs[end - 2]) && !stemVowel(cs[end - 3]) {
+            return true
+        }
+    }
+    if end == 2 && !stemVowel(cs[1]) && stemVowel(cs[0]) {
+        return true
+    }
+    end >= 4 && cs[end - 4] == "p" && cs[end - 3] == "a" && cs[end - 2] == "s" && cs[end - 1] == "t"
+}
+
+// The working state of one word: its characters and where R1 and R2
+// start.
+struct Stemming {
+    cs: [String] = []
+    p1: Int = 0
+    p2: Int = 0
+
+    fn ends(_ suffix: String) -> Bool {
+        let s = suffix.characters
+        let n = cs.count
+        if s.count > n {
+            return false
+        }
+        for k in 0..s.count {
+            if cs[n - s.count + k] != s[k] {
+                return false
+            }
+        }
+        true
+    }
+
+    // The longest of `suffixes` the word ends with, or "".
+    fn longest(_ suffixes: [String]) -> String {
+        var best = ""
+        for s in suffixes {
+            if s.count > best.count && ends(s) {
+                best = s
+            }
+        }
+        best
+    }
+
+    // The characters before the last k, joined.
+    fn head(_ k: Int) -> String {
+        cs.slice(from: 0, to: cs.count - k).joined()
+    }
+
+    // Puts `with` in place of the last k characters.
+    fn replace(_ k: Int, _ with: String) {
+        var out = cs.slice(from: 0, to: cs.count - k)
+        for ch in with.characters {
+            out.append(ch)
+        }
+        cs = out
+    }
+
+    fn step1a() {
+        let quote = longest(["'s'", "'s", "'"])
+        if !quote.isEmpty {
+            replace(quote.count, "")
+        }
+        let s = longest(["sses", "ied", "ies", "s", "us", "ss"])
+        let start = cs.count - s.count
+        if s == "sses" {
+            replace(4, "ss")
+        } else if s == "ied" || s == "ies" {
+            replace(3, if start >= 2 { "i" } else { "ie" })
+        } else if s == "s" {
+            // next gopast v: a vowel before the letter before the s.
+            if start >= 1 && stemHasVowel(cs, 0, start - 1) {
+                replace(1, "")
+            }
+        }
+    }
+
+    fn step1b() {
+        let s = longest(["eed", "eedly", "ed", "edly", "ing", "ingly"])
+        if s.isEmpty {
+            return
+        }
+        let start = cs.count - s.count
+        if s == "eed" || s == "eedly" {
+            if start >= p1 {
+                let before = head(s.count)
+                if !(before == "proc" || before == "exc" || before == "succ") {
+                    replace(s.count, "ee")
+                }
+            }
+            return
+        }
+        if s == "ing" {
+            let before = head(3)
+            if start >= 1 && cs[start - 1] == "y" {
+                if start == 2 && !stemVowel(cs[0]) {
+                    replace(4, "ie")
+                    return
+                }
+            } else if before == "inn" || before == "out" || before == "cann" || before == "herr" || before == "earr" || before == "even" {
+                return
+            }
+        }
+        if !stemHasVowel(cs, 0, start) {
+            return
+        }
+        replace(s.count, "")
+        let end = longest(["at", "bl", "iz", "bb", "dd", "ff", "gg", "mm", "nn", "pp", "rr", "tt"])
+        let n = cs.count
+        if end == "at" || end == "bl" || end == "iz" {
+            cs.append("e")
+        } else if !end.isEmpty {
+            if !(n == 3 && (cs[0] == "a" || cs[0] == "e" || cs[0] == "o")) {
+                replace(1, "")
+            }
+        } else if n == p1 && stemShort(cs, n) {
+            cs.append("e")
+        }
+    }
+
+    fn step1c() {
+        let n = cs.count
+        if n >= 3 && (cs[n - 1] == "y" || cs[n - 1] == "Y") && !stemVowel(cs[n - 2]) {
+            replace(1, "i")
+        }
+    }
+
+    fn step2() {
+        let s = longest(["tional", "enci", "anci", "abli", "entli", "izer", "ization", "ational", "ation", "ator",
+            "alism", "aliti", "alli", "fulness", "ousli", "ousness", "iveness", "iviti", "biliti", "bli", "ogist",
+            "ogi", "fulli", "lessli", "li"])
+        if s.isEmpty {
+            return
+        }
+        let start = cs.count - s.count
+        if start < p1 {
+            return
+        }
+        match s {
+            "tional" -> replace(6, "tion")
+            "enci" -> replace(4, "ence")
+            "anci" -> replace(4, "ance")
+            "abli" -> replace(4, "able")
+            "entli" -> replace(5, "ent")
+            "izer", "ization" -> replace(s.count, "ize")
+            "ational", "ation", "ator" -> replace(s.count, "ate")
+            "alism", "aliti", "alli" -> replace(s.count, "al")
+            "fulness" -> replace(7, "ful")
+            "ousli", "ousness" -> replace(s.count, "ous")
+            "iveness", "iviti" -> replace(s.count, "ive")
+            "biliti", "bli" -> replace(s.count, "ble")
+            "ogist" -> replace(5, "og")
+            "ogi" -> {
+                if start >= 1 && cs[start - 1] == "l" {
+                    replace(3, "og")
+                }
+            }
+            "fulli" -> replace(5, "ful")
+            "lessli" -> replace(6, "less")
+            _ -> {
+                // li, after one of c d e g h k m n r t.
+                if start >= 1 && "cdeghkmnrt".contains(cs[start - 1]) {
+                    replace(2, "")
+                }
+            }
+        }
+    }
+
+    fn step3() {
+        let s = longest(["tional", "ational", "alize", "icate", "iciti", "ical", "ful", "ness", "ative"])
+        if s.isEmpty {
+            return
+        }
+        let start = cs.count - s.count
+        if start < p1 {
+            return
+        }
+        match s {
+            "tional" -> replace(6, "tion")
+            "ational" -> replace(7, "ate")
+            "alize" -> replace(5, "al")
+            "icate", "iciti", "ical" -> replace(s.count, "ic")
+            "ful", "ness" -> replace(s.count, "")
+            _ -> {
+                if start >= p2 {
+                    replace(5, "")
+                }
+            }
+        }
+    }
+
+    fn step4() {
+        let s = longest(["al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement", "ment", "ent", "ism",
+            "ate", "iti", "ous", "ive", "ize", "ion"])
+        if s.isEmpty {
+            return
+        }
+        let start = cs.count - s.count
+        if start < p2 {
+            return
+        }
+        if s == "ion" {
+            if start >= 1 && (cs[start - 1] == "s" || cs[start - 1] == "t") {
+                replace(3, "")
+            }
+            return
+        }
+        replace(s.count, "")
+    }
+
+    fn step5() {
+        let n = cs.count
+        if n == 0 {
+            return
+        }
+        let start = n - 1
+        if cs[start] == "e" {
+            if start >= p2 || (start >= p1 && !stemShort(cs, start)) {
+                replace(1, "")
+            }
+        } else if cs[start] == "l" {
+            if start >= p2 && start >= 1 && cs[start - 1] == "l" {
+                replace(1, "")
+            }
+        }
+    }
+}
+
+// The Porter2 stem of an English word, in lower case: stem("running") is
+// "run", stem("generously") "generous", stem("Beams") "beam". A curly
+// apostrophe counts as a straight one. Give it one word at a time: what
+// `words` gives.
+public fn stem(_ word: String) -> String {
+    let w = word.lowercase().replace("’", with: "'")
+    if let e = stemException(w) {
+        return e
+    }
+    var cs = w.characters
+    if cs.count < 3 {
+        return w
+    }
+    // prelude
+    if cs[0] == "'" {
+        cs.remove(at: 0)
+    }
+    var marked = false
+    if !cs.isEmpty && cs[0] == "y" {
+        cs[0] = "Y"
+        marked = true
+    }
+    for k in 1..cs.count {
+        if cs[k] == "y" && stemVowel(cs[k - 1]) {
+            cs[k] = "Y"
+            marked = true
+        }
+    }
+    // mark_regions
+    let n = cs.count
+    var st = Stemming(cs: cs, p1: n, p2: n)
+    let joined = cs.joined()
+    var r1 = -1
+    for prefix in ["gener", "commun", "arsen", "past", "univers", "later", "emerg", "organ", "inter"] {
+        if joined.hasPrefix(prefix) {
+            r1 = prefix.count
+        }
+    }
+    if r1 < 0 {
+        r1 = stemRegion(cs, 0)
+    }
+    if r1 >= 0 {
+        st.p1 = r1
+        let r2 = stemRegion(cs, r1)
+        if r2 >= 0 {
+            st.p2 = r2
+        }
+    }
+    st.step1a()
+    st.step1b()
+    st.step1c()
+    st.step2()
+    st.step3()
+    st.step4()
+    st.step5()
+    // postlude
+    let out = st.cs.joined()
+    if marked {
+        return out.replace("Y", with: "y")
+    }
+    out
+}
+
+// The stems of the words of `text`, in order: stems("The beams were
+// bending") is ["the", "beam", "were", "bend"].
+public fn stems(_ text: String) -> [String] {
+    var out: [String] = []
+    for w in words(text) {
+        out.append(stem(w))
+    }
+    out
+}

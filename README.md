@@ -1,8 +1,8 @@
 # text
 
 Text tools for [Tessel](https://tessel-lang.syncster.dev) programs:
-characters as a reader sees them, words and sentences, hyphenation, and
-fuzzy matching. It follows Unicode 17's rules, and the results are checked
+characters as a reader sees them, words and sentences, hyphenation, fuzzy
+matching, stemming, full-text search and readability scores. It follows Unicode 17's rules, and the results are checked
 against Unicode's own test files and against Python libraries.
 
 ```tessel
@@ -119,6 +119,73 @@ space or punctuation, or a capital after a small letter) or follows the
 previous match directly. Each letter skipped costs a point, so "opfl" ranks
 "Open File" before "Open Folder".
 
+## Stemming
+
+```tessel
+text.stem("running")        // "run"
+text.stems("The engineers were checking the bending of reinforced beams")
+// ["the", "engin", "were", "check", "the", "bend", "of", "reinforc", "beam"]
+```
+
+This is Snowball's English (Porter2) stemmer. It gives the same stem as
+Snowball for all 42,649 words of Snowball's own test list. A stem isn't
+always a word ("engin", "happi"), so compare stems with stems.
+
+## Search
+
+```tessel
+var help = text.SearchIndex()
+let pages = [
+    "Simply supported beams: bending moment and shear force diagrams.",
+    "Reinforced concrete columns under axial load and bending.",
+    "Steel beam connections: bolted and welded.",
+    "The moment of inertia of a section.",
+]
+for p in pages {
+    let ignored = help.add(p)                     // gives the document's number: 0, 1, 2…
+}
+for hit in help.search("beam bending") {
+    print("{hit.document} {hit.score.formatted(decimals: 3)}  {pages[hit.document]}")
+}
+print(help.search("\"bending moment\"").count)    // a phrase: 1
+print(help.search("reinf", prefix: true)[0].document)   // while typing: 1
+```
+
+```text
+0 0.531  Simply supported beams: bending moment and shear force diagrams.
+2 0.327  Steel beam connections: bolted and welded.
+1 0.304  Reinforced concrete columns under axial load and bending.
+1
+1
+```
+
+Results are ranked by BM25, as in Lucene and Elasticsearch (k1 = 1.2,
+b = 0.75). The scores match Python's bm25s. Documents and queries are cut
+into words, case folded, stripped of Snowball's 174 English stopwords and
+stemmed, so "beam" finds "beams". `SearchIndex(stemming: false, stopwords: [])`
+matches whole words only. A "phrase in quotes" must appear with its words
+in order. `prefix: true` lets the last word be cut short, for searching as
+you type. `addTerms` and `searchTerms` take terms that you split up
+yourself.
+
+## Readability
+
+```tessel
+let st = text.textStats("The cat sat on the mat. It was happy. Readability formulas estimate the education needed to understand a passage.")
+print("{st.sentences} sentences, {st.words} words, {st.syllables} syllables")   // 3 sentences, 19 words, 35 syllables
+print(st.fleschReadingEase().formatted(decimals: 1))                             // 44.6
+print(st.fleschKincaidGrade().formatted(decimals: 1))                            // 8.6
+```
+
+`TextStats` holds the counts and has `fleschReadingEase`,
+`fleschKincaidGrade`, `gunningFog`, `smogIndex`, `colemanLiauIndex`,
+`automatedReadabilityIndex` and `readingMinutes`. `syllables(word)` counts
+by English spelling rules. On the 35,627 words that the CMU Pronouncing
+Dictionary shares with `/usr/share/dict/words`, the count matches CMU's for
+93.6% of them, and for 97.5% of the words of ordinary prose. That is close
+enough for formulas that average over a whole text. It does get some words
+wrong ("created" counts as 2).
+
 ## Tests
 
 `tessel run tests` checks:
@@ -126,17 +193,21 @@ previous match directly. Each letter skipped costs a point, so "opfl" ranks
 - the category of all 1,114,112 code points against `UnicodeData.txt`, and White_Space against `PropList.txt`;
 - case folding against `CaseFolding.txt` and Python's `str.casefold`;
 - all 3,222 cases of Unicode's `GraphemeBreakTest.txt`, `WordBreakTest.txt` and `SentenceBreakTest.txt`;
-- hyphenation of 33,000 words against [pyphen](https://pyphen.org) with the same patterns;
+- hyphenation of 14,000 words against [pyphen](https://pyphen.org) with the same patterns;
 - 1,509 pairs of distances against [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz);
+- stems of Snowball's whole English test list (42,649 words);
+- BM25 scores of 400 queries over 300 documents against [bm25s](https://github.com/xhluca/bm25s);
+- syllable counts of 35,627 words, against the rules' first version in Python and against the CMU dictionary;
 - the rest by hand, plus speed.
 
 `tests/cases.json` is made by `tools/oracle/oracle.py`. Running it needs
-the Unicode files (`python3 tools/fetch.py`) and a venv with pyphen and
-rapidfuzz. `tools/gen/gen_tables.py` and `tools/gen/hyph.py` write
+the downloaded files (`python3 tools/fetch.py`) and a venv with pyphen,
+rapidfuzz, snowballstemmer, bm25s and cmudict. `tools/gen/gen_tables.py` and `tools/gen/hyph.py` write
 `unicode_data.tsl` and `hyphen_en.tsl` from the same files.
 
 ## Licence
 
 MIT. The English hyphenation patterns in `hyphen_en.tsl` are © Gerard D.C.
 Kuiken, and may be copied and changed as long as their notice (kept at the
-top of that file) stays with them.
+top of that file) stays with them. The stopword list is Snowball's (BSD
+licence).

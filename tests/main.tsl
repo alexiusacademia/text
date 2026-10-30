@@ -41,6 +41,29 @@ struct DistanceCase {
     jaroWinkler: Float
 }
 
+struct StemCases {
+    words: [String]
+    stems: [String]
+}
+
+struct SearchQuery {
+    terms: [String]
+    documents: [Int]
+    scores: [Float]
+}
+
+struct SearchCases {
+    documents: [[String]]
+    queries: [SearchQuery]
+}
+
+// The CMU counts are written as one number: 23 for "2 or 3".
+struct SyllableCases {
+    words: [String]
+    rules: [Int]
+    cmu: [Int]
+}
+
 struct Cases {
     categories: [CategoryRun]
     spaces: [Int]
@@ -51,6 +74,9 @@ struct Cases {
     hyphens: [HyphenCase]
     hyphensShort: [HyphenCase]
     distances: [DistanceCase]
+    stems: StemCases
+    search: SearchCases
+    syllables: SyllableCases
 }
 
 // Checks that `got` is true: 1 if it isn't.
@@ -241,6 +267,70 @@ fn oracle() -> Result<Int> {
         }
     }
     failed += summary("distances (rapidfuzz)", cases.distances.count, wrong)
+
+    wrong = 0
+    for (k, w) in cases.stems.words.enumerated() {
+        let got = text.stem(w)
+        if got != cases.stems.stems[k] {
+            wrong += 1
+            if wrong <= 10 {
+                print("  stem {w}: {got}, expected {cases.stems.stems[k]}")
+            }
+        }
+    }
+    failed += summary("stem (Snowball's list)", cases.stems.words.count, wrong)
+
+    var index = text.SearchIndex()
+    for d in cases.search.documents {
+        let ignored = index.addTerms(d)
+    }
+    wrong = 0
+    for q in cases.search.queries {
+        let hits = index.searchTerms(q.terms, limit: 30)
+        var problem = hits.count != q.documents.count
+        if !problem {
+            for (k, h) in hits.enumerated() {
+                let rel = (h.score - q.scores[k]) / q.scores[k]
+                // Equal scores may come in either order in floating point.
+                if (h.document != q.documents[k] && !close(h.score, q.scores[k])) || rel > 1e-9 || rel < -1e-9 {
+                    problem = true
+                }
+            }
+        }
+        if problem {
+            wrong += 1
+            if wrong <= 3 {
+                let got = if hits.isEmpty { "none" } else { "{hits[0].document} {hits[0].score}" }
+                let want = if q.documents.isEmpty { "none" } else { "{q.documents[0]} {q.scores[0]}" }
+                print("  search {q.terms}: {hits.count} hits, first {got}; expected {q.documents.count}, first {want}")
+            }
+        }
+    }
+    failed += summary("search scores (bm25s, Lucene BM25)", cases.search.queries.count, wrong)
+
+    wrong = 0
+    var agree = 0
+    let sy = cases.syllables
+    for (k, w) in sy.words.enumerated() {
+        let n = text.syllables(w)
+        if n != sy.rules[k] {
+            wrong += 1
+            if wrong <= 5 {
+                print("  syllables {w}: {n}, the rules give {sy.rules[k]}")
+            }
+        }
+        var c = sy.cmu[k]
+        while c > 0 {
+            if c % 10 == n {
+                agree += 1
+                break
+            }
+            c = c / 10
+        }
+    }
+    failed += summary("syllables (the rules)", sy.words.count, wrong)
+    let share = Float(agree) / Float(sy.words.count) * 100.0
+    failed += holds("syllables agree with CMU on {share.formatted(decimals: 2)}% of {sy.words.count} words", share > 93.0)
     return .ok(failed)
 }
 
@@ -329,6 +419,50 @@ fn byHand() -> Int {
     failed += same("fuzzyFilter", strings(text.fuzzyFilter("of", ["proof", "Open File", "Toggle Fold", "nothing"])), "[Open File|Toggle Fold|proof]")
     failed += same("fuzzyFilter of a camel case name", strings(text.fuzzyFilter("gbn", ["getBoundingName", "gobbling", "gbn_old"])), "[gbn_old|getBoundingName|gobbling]")
     failed += holds("fuzzyFilter with an empty pattern keeps all", text.fuzzyFilter("", ["b", "a"]) == ["b", "a"])
+
+    // Stems.
+    failed += same("stem", text.stem("Running") + " " + text.stem("generously") + " " + text.stem("beams") + " " + text.stem("skies") + " " + text.stem("it’s"), "run generous beam sky it")
+    failed += same("stems", strings(text.stems("The beams were bending")), "[the|beam|were|bend]")
+    failed += holds("stem of short words", text.stem("is") == "is" && text.stem("") == "")
+
+    // Search.
+    var help = text.SearchIndex()
+    let d0 = help.add("Simply supported beams: bending moment and shear force diagrams.")
+    let d1 = help.add("Reinforced concrete columns under axial load and bending.")
+    let d2 = help.add("Steel beam connections: bolted and welded.")
+    let d3 = help.add("The moment of inertia of a section.")
+    failed += holds("add numbers documents", d0 == 0 && d3 == 3 && help.count() == 4)
+    let byBeam = help.search("Beam")
+    failed += holds("search finds stems", byBeam.count == 2 && byBeam[0].document == 2 && byBeam[1].document == 0)
+    failed += holds("search ignores stopwords", help.search("the of and").isEmpty)
+    let bend = help.search("bending moment")
+    failed += holds("search ranks by both words", bend.count == 3 && bend[0].document == 0)
+    let phrase = help.search("\"bending moment\"")
+    failed += holds("search with a phrase", phrase.count == 1 && phrase[0].document == 0)
+    failed += holds("a phrase must be there in order", help.search("\"moment bending\"").isEmpty)
+    let typing = help.search("reinf", prefix: true)
+    failed += holds("search with prefix", typing.count == 1 && typing[0].document == 1 && help.search("reinf").isEmpty)
+    let typing2 = help.search("steel conn", prefix: true)
+    failed += holds("prefix applies to the last word only", typing2.count == 1 && typing2[0].document == 2)
+    failed += holds("search limit", help.search("bending moment", limit: 1).count == 1)
+    var exact = text.SearchIndex(stemming: false, stopwords: [])
+    let e0 = exact.add("the beams")
+    failed += holds("without stemming or stopwords", exact.search("beam").isEmpty && exact.search("the").count == 1 && e0 == 0)
+    failed += holds("an empty index", text.SearchIndex().search("x").isEmpty)
+
+    // Readability.
+    failed += holds("syllables", text.syllables("readability") == 5 && text.syllables("cake") == 1 && text.syllables("beautiful") == 3 && text.syllables("café") == 2 && text.syllables("") == 0 && text.syllables("42") == 1)
+    let st = text.textStats("The cat sat on the mat. It was happy!")
+    failed += holds("textStats", st.sentences == 2 && st.words == 9 && st.syllables == 10 && st.letters == 27 && st.polysyllables == 0)
+    let fixed = text.TextStats(sentences: 2, words: 20, syllables: 30, letters: 100, polysyllables: 4)
+    failed += holds("fleschReadingEase", close(fixed.fleschReadingEase(), 206.835 - 1.015 * 10.0 - 84.6 * 1.5))
+    failed += holds("fleschKincaidGrade", close(fixed.fleschKincaidGrade(), 0.39 * 10.0 + 11.8 * 1.5 - 15.59))
+    failed += holds("gunningFog", close(fixed.gunningFog(), 0.4 * (10.0 + 20.0)))
+    failed += holds("smogIndex", close(fixed.smogIndex(), 1.043 * sqrt(60.0) + 3.1291))
+    failed += holds("colemanLiauIndex", close(fixed.colemanLiauIndex(), 0.0588 * 500.0 - 0.296 * 10.0 - 15.8))
+    failed += holds("automatedReadabilityIndex", close(fixed.automatedReadabilityIndex(), 4.71 * 5.0 + 5.0 - 21.43))
+    failed += holds("readingMinutes", close(text.TextStats(words: 476).readingMinutes(), 2.0))
+    failed += holds("formulas of no text are 0", close(text.textStats("").fleschReadingEase(), 0.0) && close(text.textStats("...").gunningFog(), 0.0))
     failed
 }
 

@@ -19,6 +19,8 @@ FILES = {
         "auxiliary/SentenceBreakProperty.txt", "auxiliary/GraphemeBreakTest.txt",
         "auxiliary/WordBreakTest.txt", "auxiliary/SentenceBreakTest.txt",
     ]],
+    "stem": ["https://raw.githubusercontent.com/snowballstem/snowball-data/master/english/voc.txt",
+             "https://raw.githubusercontent.com/snowballstem/snowball-data/master/english/output.txt"],
     "hyph": ["https://raw.githubusercontent.com/hyphenation/tex-hyphen/master/"
              "hyph-utf8/tex/generic/hyph-utf8/patterns/tex/hyph-en-us.tex"],
 }
