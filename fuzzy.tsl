@@ -1,0 +1,409 @@
+// text: how alike two texts are, and finding what someone meant from a
+// few letters. The distances count code points and are the same as
+// Python's rapidfuzz gives (checked on 1,500 pairs).
+//
+// - levenshtein: the fewest single-character insertions, deletions and
+//   substitutions that turn one text into the other.
+// - damerauLevenshtein: the same, with swapping two neighbours as one
+//   edit ("teh" → "the"); the "optimal string alignment" variant, which
+//   doesn't edit a substring twice.
+// - similarity: 1 − (insertions + deletions) / (both lengths), from 0 to 1
+//   (rapidfuzz's ratio / 100, Python difflib's ratio in most cases).
+// - jaro, jaroWinkler: for short texts such as names; Jaro-Winkler counts
+//   a shared start of up to four characters for more.
+//
+// `closest` picks the words of a list nearest to a misspelled one;
+// `fuzzyMatch` and `fuzzyFilter` rank items by letters typed in order
+// with gaps, as a command palette or file finder does.
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+// The Levenshtein distance between `a` and `b`.
+public fn levenshtein(_ a: String, _ b: String) -> Int {
+    let x = decode(a).cps
+    let y = decode(b).cps
+    let m = y.count
+    var prev: [Int] = []
+    for j in 0..(m + 1) {
+        prev.append(j)
+    }
+    var cur = prev
+    for i in 1..(x.count + 1) {
+        cur[0] = i
+        for j in 1..(m + 1) {
+            let cost = if x[i - 1] == y[j - 1] { 0 } else { 1 }
+            var best = prev[j - 1] + cost
+            if prev[j] + 1 < best {
+                best = prev[j] + 1
+            }
+            if cur[j - 1] + 1 < best {
+                best = cur[j - 1] + 1
+            }
+            cur[j] = best
+        }
+        let keep = prev
+        prev = cur
+        cur = keep
+    }
+    prev[m]
+}
+
+// The Damerau-Levenshtein distance (optimal string alignment) between
+// `a` and `b`: damerauLevenshtein("ca", "ac") is 1 where levenshtein is 2.
+public fn damerauLevenshtein(_ a: String, _ b: String) -> Int {
+    let x = decode(a).cps
+    let y = decode(b).cps
+    let m = y.count
+    var before: [Int] = []
+    var prev: [Int] = []
+    for j in 0..(m + 1) {
+        prev.append(j)
+        before.append(0)
+    }
+    var cur = prev
+    for i in 1..(x.count + 1) {
+        cur[0] = i
+        for j in 1..(m + 1) {
+            let cost = if x[i - 1] == y[j - 1] { 0 } else { 1 }
+            var best = prev[j - 1] + cost
+            if prev[j] + 1 < best {
+                best = prev[j] + 1
+            }
+            if cur[j - 1] + 1 < best {
+                best = cur[j - 1] + 1
+            }
+            if i > 1 && j > 1 && x[i - 1] == y[j - 2] && x[i - 2] == y[j - 1] && before[j - 2] + 1 < best {
+                best = before[j - 2] + 1
+            }
+            cur[j] = best
+        }
+        before = prev
+        prev = cur
+        cur = before
+        cur[0] = 0
+    }
+    prev[m]
+}
+
+// The length of the longest sequence of code points that `x` and `y` both
+// have in order.
+fn commonSubsequence(_ x: [Int], _ y: [Int]) -> Int {
+    let m = y.count
+    var prev: [Int] = []
+    for j in 0..(m + 1) {
+        prev.append(0)
+    }
+    var cur = prev
+    for i in 1..(x.count + 1) {
+        for j in 1..(m + 1) {
+            if x[i - 1] == y[j - 1] {
+                cur[j] = prev[j - 1] + 1
+            } else {
+                cur[j] = if prev[j] > cur[j - 1] { prev[j] } else { cur[j - 1] }
+            }
+        }
+        let keep = prev
+        prev = cur
+        cur = keep
+    }
+    prev[m]
+}
+
+// How alike `a` and `b` are, from 0 (nothing shared) to 1 (the same):
+// 1 − (insertions + deletions needed) / (a.count + b.count). 1 for two
+// empty texts. similarity("kitten", "sitting") is 0.615….
+public fn similarity(_ a: String, _ b: String) -> Float {
+    let x = decode(a).cps
+    let y = decode(b).cps
+    let total = x.count + y.count
+    if total == 0 {
+        return 1.0
+    }
+    let lcs = commonSubsequence(x, y)
+    1.0 - Float(total - 2 * lcs) / Float(total)
+}
+
+// The Jaro similarity of `a` and `b`, from 0 to 1. Characters match when
+// they are the same and no further apart than half the longer text, less
+// one; matches in a different order count as half a transposition each.
+public fn jaro(_ a: String, _ b: String) -> Float {
+    let x = decode(a).cps
+    let y = decode(b).cps
+    jaroOf(x, y)
+}
+
+fn jaroOf(_ x: [Int], _ y: [Int]) -> Float {
+    let lx = x.count
+    let ly = y.count
+    if lx == 0 && ly == 0 {
+        return 1.0
+    }
+    if lx == 0 || ly == 0 {
+        return 0.0
+    }
+    var window = (if lx > ly { lx } else { ly }) / 2 - 1
+    if window < 0 {
+        window = 0
+    }
+    var usedY: [Bool] = []
+    for j in 0..ly {
+        usedY.append(false)
+    }
+    var matchedX: [Int] = []
+    for i in 0..lx {
+        let lo = if i - window > 0 { i - window } else { 0 }
+        let hi = if i + window + 1 < ly { i + window + 1 } else { ly }
+        var j = lo
+        while j < hi {
+            if !usedY[j] && x[i] == y[j] {
+                usedY[j] = true
+                matchedX.append(x[i])
+                break
+            }
+            j += 1
+        }
+    }
+    let matches = matchedX.count
+    if matches == 0 {
+        return 0.0
+    }
+    var k = 0
+    var half = 0
+    for j in 0..ly {
+        if usedY[j] {
+            if y[j] != matchedX[k] {
+                half += 1
+            }
+            k += 1
+        }
+    }
+    let m = Float(matches)
+    let t = Float(half / 2)
+    (m / Float(lx) + m / Float(ly) + (m - t) / m) / 3.0
+}
+
+// The Jaro-Winkler similarity of `a` and `b`: the Jaro similarity, raised
+// for a shared start of up to four characters by `prefixWeight` each,
+// when the Jaro similarity is above 0.7. jaroWinkler("martha", "marhta")
+// is 0.961….
+public fn jaroWinkler(_ a: String, _ b: String, prefixWeight: Float = 0.1) -> Float {
+    let x = decode(a).cps
+    let y = decode(b).cps
+    let sim = jaroOf(x, y)
+    if sim <= 0.7 {
+        return sim
+    }
+    var prefix = 0
+    while prefix < 4 && prefix < x.count && prefix < y.count && x[prefix] == y[prefix] {
+        prefix += 1
+    }
+    sim + Float(prefix) * prefixWeight * (1.0 - sim)
+}
+
+// The items of `choices` most like `word` (by `similarity`, ignoring
+// case), best first, at most `limit` of them and none below `cutoff`. Items
+// equally alike keep their order. For "did you mean": closest("lenght",
+// ["length", "height", "width"]) is ["length", "height"].
+public fn closest(_ word: String, _ choices: [String], limit: Int = 3, cutoff: Float = 0.6) -> [String] {
+    let w = caseFold(word)
+    var scored: [(Float, Int)] = []
+    for (k, c) in choices.enumerated() {
+        let s = similarity(w, caseFold(c))
+        if s >= cutoff {
+            scored.append((s, k))
+        }
+    }
+    let sorted = scored.sorted(by: { p, q in p.0 > q.0 })
+    var out: [String] = []
+    for p in sorted {
+        if out.count >= limit {
+            break
+        }
+        out.append(choices[p.1])
+    }
+    out
+}
+
+// ---- Typing a few letters to find something ----
+
+// How well `pattern` matched an item: a score (higher is better) and the
+// code point indexes of the item's characters that matched, for showing
+// them in bold.
+public struct FuzzyMatch {
+    score: Int = 0
+    positions: [Int] = []
+}
+
+// Points for each matched character, and the bonuses: a character that
+// starts a word of the item (after a space or punctuation, a capital after
+// a small letter, the very start), one right after the previous match, and
+// one in the same case as typed. A run of matches right after each other
+// keeps the bonus of the character it started at, so "gbn" scores higher
+// in "gbn_old" than in "getBoundingName". Each character skipped between
+// two matches costs one point, and so do the first few before the first.
+let matchPoints = 16
+let startBonus = 12
+let firstBonus = 4
+let runBonus = 6
+let caseBonus = 1
+let leadingCost = 3
+
+// The bonus for a match at index j of the item.
+fn boundaryBonus(_ cps: [Int], _ j: Int) -> Int {
+    if j == 0 {
+        return startBonus + firstBonus
+    }
+    let before = cps[j - 1]
+    let c = cps[j]
+    if !isAlphanumeric(before) && isAlphanumeric(c) {
+        return startBonus
+    }
+    if isLowercase(before) && isUppercase(c) {
+        return startBonus
+    }
+    if isDigit(before) != isDigit(c) && isAlphanumeric(before) {
+        return startBonus / 2
+    }
+    0
+}
+
+// Whether `pattern`'s characters appear in `item` in order, ignoring case,
+// and if so the best way they do. "opfl" matches "Open File" at 0, 1, 5
+// and 7. nil when they don't; an empty pattern matches with score 0.
+public fn fuzzyMatch(_ pattern: String, _ item: String) -> FuzzyMatch? {
+    let p = decode(pattern).cps
+    let t = decode(item).cps
+    let n = p.count
+    let m = t.count
+    if n == 0 {
+        return FuzzyMatch()
+    }
+    if n > m {
+        return nil
+    }
+    var pf: [Int] = []
+    for c in p {
+        pf.append(foldedOne(c))
+    }
+    var tf: [Int] = []
+    for c in t {
+        tf.append(foldedOne(c))
+    }
+    // best[i * m + j]: the best score with pattern character i matched at
+    // item index j (or `none`), from[i * m + j] the index pattern
+    // character i - 1 was matched at on that way, and lead[i * m + j] the
+    // bonus of the character the run of matches ending there started at.
+    let none = -1000000000
+    var best: [Int] = []
+    var from: [Int] = []
+    var lead: [Int] = []
+    for k in 0..(n * m) {
+        best.append(none)
+        from.append(-1)
+        lead.append(0)
+    }
+    for i in 0..n {
+        // The best of best[i - 1][j'] + j' over j' < j - 1, and where.
+        var runMax = none
+        var runAt = -1
+        for j in i..m {
+            if i > 0 && j >= 2 {
+                let prevScore = best[(i - 1) * m + j - 2]
+                if prevScore > none && prevScore + (j - 2) > runMax {
+                    runMax = prevScore + (j - 2)
+                    runAt = j - 2
+                }
+            }
+            if tf[j] != pf[i] {
+                continue
+            }
+            let bonus = boundaryBonus(t, j)
+            var gain = matchPoints
+            if t[j] == p[i] {
+                gain += caseBonus
+            }
+            if i == 0 {
+                let skipped = if j < leadingCost { j } else { leadingCost }
+                best[j] = gain + bonus - skipped
+                lead[j] = bonus
+                continue
+            }
+            var score = none
+            var at = -1
+            var runLead = bonus
+            if j >= 1 && best[(i - 1) * m + j - 1] > none {
+                // Going on with a run: the larger of this character's
+                // bonus, the run's first one and the run bonus.
+                let started = lead[(i - 1) * m + j - 1]
+                var b = if bonus > started { bonus } else { started }
+                if runBonus > b {
+                    b = runBonus
+                }
+                score = best[(i - 1) * m + j - 1] + b
+                at = j - 1
+                runLead = if bonus > started { bonus } else { started }
+            }
+            if runMax > none {
+                // Skipping j - j' - 1 characters costs that many points.
+                let skipped = runMax - j + 1 + bonus
+                if skipped > score {
+                    score = skipped
+                    at = runAt
+                    runLead = bonus
+                }
+            }
+            if at >= 0 {
+                best[i * m + j] = score + gain
+                from[i * m + j] = at
+                lead[i * m + j] = runLead
+            }
+        }
+    }
+    var end = -1
+    var top = none
+    for j in 0..m {
+        let s = best[(n - 1) * m + j]
+        if s > top {
+            top = s
+            end = j
+        }
+    }
+    if end < 0 {
+        return nil
+    }
+    var positions: [Int] = []
+    var j = end
+    var i = n - 1
+    while i >= 0 {
+        positions.insert(j, at: 0)
+        j = from[i * m + j]
+        i -= 1
+    }
+    FuzzyMatch(score: top, positions: positions)
+}
+
+// The code point c folded to one code point for matching, itself when it
+// folds to more ("ß").
+fn foldedOne(_ c: Int) -> Int {
+    let f = foldOf(c)
+    if f.count == 1 { f[0] } else { c }
+}
+
+// The items that `pattern` matches (see `fuzzyMatch`), best first; items
+// that score the same keep their order, so shorter lists should come
+// first if they matter more. All of `items` for an empty pattern.
+public fn fuzzyFilter(_ pattern: String, _ items: [String]) -> [String] {
+    var scored: [(Int, Int)] = []
+    for (k, item) in items.enumerated() {
+        if let found = fuzzyMatch(pattern, item) {
+            scored.append((found.score, k))
+        }
+    }
+    let sorted = scored.sorted(by: { a, b in a.0 > b.0 })
+    var out: [String] = []
+    for s in sorted {
+        out.append(items[s.1])
+    }
+    out
+}

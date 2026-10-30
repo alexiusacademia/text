@@ -1,0 +1,497 @@
+// text: cutting text into characters as a reader sees them (grapheme
+// clusters), words and sentences, by the default rules of Unicode's
+// UAX #29 (Unicode 17), checked against Unicode's own test files.
+//
+// A grapheme cluster is what a reader calls one character: "e" + a
+// combining accent, a flag (two regional indicators), a family emoji
+// joined with ZWJs, a Hangul syllable written in jamo, or CR LF. Tessel's
+// `count` counts code points, so "👨‍👩‍👧".count is 5 and its
+// `graphemeCount` is 1. Moving a caret, deleting with Backspace and
+// cutting a text short should go by grapheme clusters.
+//
+// Positions are code point indexes, the ones `substring` takes. A list of
+// breaks starts with 0 and ends with the text's count; the pieces are what
+// lies between two breaks one after the other.
+//
+// The rules are written with the property numbers of tools/gen/ucd.py:
+//   Grapheme_Cluster_Break: 0 Other, 1 CR, 2 LF, 3 Control, 4 Extend,
+//     5 ZWJ, 6 Regional_Indicator, 7 Prepend, 8 SpacingMark, 9 L, 10 V,
+//     11 T, 12 LV, 13 LVT
+//   Indic_Conjunct_Break: 0 None, 1 Linker, 2 Consonant, 3 Extend
+//   Word_Break: 0 Other, 1 CR, 2 LF, 3 Newline, 4 Extend, 5 ZWJ,
+//     6 Regional_Indicator, 7 Format, 8 Katakana, 9 Hebrew_Letter,
+//     10 ALetter, 11 Single_Quote, 12 Double_Quote, 13 MidNumLet,
+//     14 MidLetter, 15 MidNum, 16 Numeric, 17 ExtendNumLet, 18 WSegSpace
+//   Sentence_Break: 0 Other, 1 CR, 2 LF, 3 Extend, 4 Sep, 5 Format, 6 Sp,
+//     7 Lower, 8 Upper, 9 OLetter, 10 Numeric, 11 ATerm, 12 SContinue,
+//     13 STerm, 14 Close
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+// A piece of a text: its text, the code point indexes it runs from and up
+// to, and, for the pieces of `wordPieces`, whether it is a word (it has a
+// letter or a number in it) rather than spaces or punctuation.
+public struct Piece {
+    text: String = ""
+    from: Int = 0
+    to: Int = 0
+    isWord: Bool = false
+}
+
+// ---- Grapheme clusters ----
+
+fn graphemeBreaksOf(_ cps: [Int]) -> [Int] {
+    let n = cps.count
+    var out: [Int] = [0]
+    if n == 0 {
+        return out
+    }
+    let first = props(cps[0])
+    var prev = gcbOf(first)
+    // Regional indicators in a row just before this place.
+    var ri = if prev == 6 { 1 } else { 0 }
+    // Whether the text so far ends in Extended_Pictographic Extend*.
+    var pictExtend = pictOf(first)
+    // Whether the last character is a ZWJ after that (GB11).
+    var zwjAfterPict = false
+    // GB9c: 0 nothing, 1 an InCB consonant then InCB Extend characters,
+    // 2 the same with a Linker among them.
+    var conjunct = if incbOf(first) == 2 { 1 } else { 0 }
+    for i in 1..n {
+        let p = props(cps[i])
+        let cur = gcbOf(p)
+        let ic = incbOf(p)
+        var cut = true
+        if prev == 1 && cur == 2 {
+            cut = false                                         // GB3
+        } else if prev == 1 || prev == 2 || prev == 3 {
+            cut = true                                          // GB4
+        } else if cur == 1 || cur == 2 || cur == 3 {
+            cut = true                                          // GB5
+        } else if prev == 9 && (cur == 9 || cur == 10 || cur == 12 || cur == 13) {
+            cut = false                                         // GB6
+        } else if (prev == 12 || prev == 10) && (cur == 10 || cur == 11) {
+            cut = false                                         // GB7
+        } else if (prev == 13 || prev == 11) && cur == 11 {
+            cut = false                                         // GB8
+        } else if cur == 4 || cur == 5 || cur == 8 || prev == 7 {
+            cut = false                                         // GB9, 9a, 9b
+        } else if ic == 2 && conjunct == 2 {
+            cut = false                                         // GB9c
+        } else if prev == 5 && zwjAfterPict && pictOf(p) {
+            cut = false                                         // GB11
+        } else if prev == 6 && cur == 6 && ri % 2 == 1 {
+            cut = false                                         // GB12, 13
+        }
+        if cut {
+            out.append(i)
+        }
+        zwjAfterPict = cur == 5 && pictExtend
+        if pictOf(p) {
+            pictExtend = true
+        } else if !(cur == 4 && pictExtend) {
+            pictExtend = false
+        }
+        if ic == 2 {
+            conjunct = 1
+        } else if conjunct >= 1 && ic == 1 {
+            conjunct = 2
+        } else if !(conjunct >= 1 && ic == 3) {
+            conjunct = 0
+        }
+        ri = if cur == 6 { ri + 1 } else { 0 }
+        prev = cur
+    }
+    out.append(n)
+    out
+}
+
+// Where `text` may be cut between grapheme clusters: 0, each place between
+// two clusters, and the text's count. [0] for "".
+public fn graphemeBreaks(_ text: String) -> [Int] {
+    graphemeBreaksOf(decode(text).cps)
+}
+
+// The grapheme clusters of `text`: the characters as a reader counts
+// them. graphemes("ñ👍🏽🇵🇭") is ["ñ", "👍🏽", "🇵🇭"] however the ñ is
+// written.
+public fn graphemes(_ text: String) -> [String] {
+    let d = decode(text)
+    piecesOf(d, graphemeBreaksOf(d.cps))
+}
+
+// How many grapheme clusters `text` has.
+public fn graphemeCount(_ text: String) -> Int {
+    graphemeBreaksOf(decode(text).cps).count - 1
+}
+
+// The texts between the breaks one after the other.
+fn piecesOf(_ d: Decoded, _ breaks: [Int]) -> [String] {
+    var out: [String] = []
+    for k in 1..breaks.count {
+        out.append(d.piece(breaks[k - 1], breaks[k]))
+    }
+    out
+}
+
+// ---- Words ----
+
+// The Word_Break rules work on the text with Extend, Format and ZWJ
+// characters joined to the character before them (WB4). `Joined` holds
+// that text: `wb` the property of each character that is left, `index`
+// where it is in the code points, and `of` for each code point the place
+// of its character in `wb`, or -1 for one joined to the one before.
+struct Joined {
+    wb: [Int] = []
+    index: [Int] = []
+    of: [Int] = []
+}
+
+// `kinds` holds a property per code point; those in `ignored` join the
+// one before, except after the start or one of `fresh`.
+fn joinIgnored(_ kinds: [Int], _ ignored: Set<Int>, _ fresh: Set<Int>) -> Joined {
+    var j = Joined()
+    for i in 0..kinds.count {
+        let k = kinds[i]
+        if ignored.contains(k) && !j.wb.isEmpty && !fresh.contains(j.wb[j.wb.count - 1]) {
+            j.of.append(-1)
+        } else {
+            j.of.append(j.wb.count)
+            j.wb.append(k)
+            j.index.append(i)
+        }
+    }
+    j
+}
+
+// ALetter or Hebrew_Letter.
+fn ahLetter(_ v: Int) -> Bool { v == 10 || v == 9 }
+
+// MidNumLet or Single_Quote.
+fn midNumLetQ(_ v: Int) -> Bool { v == 13 || v == 11 }
+
+fn wordBreaksOf(_ cps: [Int]) -> [Int] {
+    let n = cps.count
+    var out: [Int] = [0]
+    if n == 0 {
+        return out
+    }
+    var wb: [Int] = []
+    var pict: [Bool] = []
+    for c in cps {
+        let p = props(c)
+        wb.append(wbOf(p))
+        pict.append(pictOf(p))
+    }
+    let j = joinIgnored(wb, [4, 5, 7], [1, 2, 3])
+    let e = j.wb
+    let m = e.count
+    // How many regional indicators in a row end at each place of e.
+    var riRun: [Int] = []
+    for k in 0..m {
+        riRun.append(if e[k] == 6 { (if k > 0 { riRun[k - 1] } else { 0 }) + 1 } else { 0 })
+    }
+    for i in 1..n {
+        let a = wb[i - 1]
+        let b = wb[i]
+        if a == 1 && b == 2 {
+            continue                                            // WB3
+        }
+        if a == 1 || a == 2 || a == 3 || b == 1 || b == 2 || b == 3 {
+            out.append(i)                                       // WB3a, 3b
+            continue
+        }
+        if a == 5 && pict[i] {
+            continue                                            // WB3c
+        }
+        if a == 18 && b == 18 {
+            continue                                            // WB3d
+        }
+        let k = j.of[i]
+        if k < 0 {
+            continue                                            // WB4
+        }
+        let x = e[k - 1]
+        let y = e[k]
+        let w = if k >= 2 { e[k - 2] } else { -1 }
+        let z = if k + 1 < m { e[k + 1] } else { -1 }
+        var join = false
+        if ahLetter(x) && ahLetter(y) {
+            join = true                                         // WB5
+        } else if ahLetter(x) && (y == 14 || midNumLetQ(y)) && ahLetter(z) {
+            join = true                                         // WB6
+        } else if ahLetter(w) && (x == 14 || midNumLetQ(x)) && ahLetter(y) {
+            join = true                                         // WB7
+        } else if x == 9 && y == 11 {
+            join = true                                         // WB7a
+        } else if x == 9 && y == 12 && z == 9 {
+            join = true                                         // WB7b
+        } else if w == 9 && x == 12 && y == 9 {
+            join = true                                         // WB7c
+        } else if (x == 16 || ahLetter(x)) && (y == 16 || (x == 16 && ahLetter(y))) {
+            join = true                                         // WB8, 9, 10
+        } else if w == 16 && (x == 15 || midNumLetQ(x)) && y == 16 {
+            join = true                                         // WB11
+        } else if x == 16 && (y == 15 || midNumLetQ(y)) && z == 16 {
+            join = true                                         // WB12
+        } else if x == 8 && y == 8 {
+            join = true                                         // WB13
+        } else if (ahLetter(x) || x == 16 || x == 8 || x == 17) && y == 17 {
+            join = true                                         // WB13a
+        } else if x == 17 && (ahLetter(y) || y == 16 || y == 8) {
+            join = true                                         // WB13b
+        } else if x == 6 && y == 6 && riRun[k - 1] % 2 == 1 {
+            join = true                                         // WB15, 16
+        }
+        if !join {
+            out.append(i)                                       // WB999
+        }
+    }
+    out.append(n)
+    out
+}
+
+// Where `text` may be cut between words, by Unicode's rules: around every
+// run of spaces and every punctuation mark, but not inside "don't",
+// "e.g.", "3.14", "1,000", "foo_bar" or a run of katakana. Chinese and
+// Japanese ideographs come apart one by one.
+public fn wordBreaks(_ text: String) -> [Int] {
+    wordBreaksOf(decode(text).cps)
+}
+
+// Whether the code points from..to make a word: one has a letter or a
+// number.
+fn hasWordChar(_ cps: [Int], _ from: Int, _ to: Int) -> Bool {
+    for i in from..to {
+        if isAlphanumeric(cps[i]) {
+            return true
+        }
+    }
+    false
+}
+
+// The pieces of `text` between word breaks, words and the rest (spaces,
+// punctuation, emoji), with where each one is.
+public fn wordPieces(_ text: String) -> [Piece] {
+    let d = decode(text)
+    let breaks = wordBreaksOf(d.cps)
+    var out: [Piece] = []
+    for k in 1..breaks.count {
+        let a = breaks[k - 1]
+        let b = breaks[k]
+        out.append(Piece(text: d.piece(a, b), from: a, to: b, isWord: hasWordChar(d.cps, a, b)))
+    }
+    out
+}
+
+// The words of `text`, without the spaces and punctuation between them.
+// words("Don't stop: it's 3.5 m/s!") is ["Don't", "stop", "it's", "3.5",
+// "m", "s"].
+public fn words(_ text: String) -> [String] {
+    var out: [String] = []
+    for p in wordPieces(text) {
+        if p.isWord {
+            out.append(p.text)
+        }
+    }
+    out
+}
+
+// How many words `text` has (see `words`).
+public fn wordCount(_ text: String) -> Int {
+    let d = decode(text)
+    let breaks = wordBreaksOf(d.cps)
+    var n = 0
+    for k in 1..breaks.count {
+        if hasWordChar(d.cps, breaks[k - 1], breaks[k]) {
+            n += 1
+        }
+    }
+    n
+}
+
+// The piece of `text` that the code point index `at` is in: what a
+// double click picks. At the very end of the text, the last piece. A
+// piece with nothing in it for "".
+public fn wordAt(_ text: String, _ at: Int) -> Piece {
+    let pieces = wordPieces(text)
+    for p in pieces {
+        if at < p.to {
+            return p
+        }
+    }
+    pieces.last ?? Piece()
+}
+
+// ---- Moving by characters and words ----
+
+// The first break of `breaks` after `at`, or the last one.
+fn breakAfter(_ breaks: [Int], _ at: Int) -> Int {
+    for b in breaks {
+        if b > at {
+            return b
+        }
+    }
+    breaks[breaks.count - 1]
+}
+
+// The last break of `breaks` before `at`, or 0.
+fn breakBefore(_ breaks: [Int], _ at: Int) -> Int {
+    var k = breaks.count - 1
+    while k >= 0 {
+        if breaks[k] < at {
+            return breaks[k]
+        }
+        k -= 1
+    }
+    0
+}
+
+// Where the caret goes from `at` with the right arrow: past the next
+// grapheme cluster. The text's count at the end.
+public fn nextGrapheme(_ text: String, _ at: Int) -> Int {
+    breakAfter(graphemeBreaks(text), at)
+}
+
+// Where the caret goes from `at` with the left arrow or Backspace deletes
+// to: the start of the grapheme cluster before it. 0 at the start.
+public fn previousGrapheme(_ text: String, _ at: Int) -> Int {
+    breakBefore(graphemeBreaks(text), at)
+}
+
+// The end of the next word after `at` (the end of the word `at` is in, if
+// it is in one): where Option+Right goes on a Mac.
+public fn nextWordEnd(_ text: String, _ at: Int) -> Int {
+    let pieces = wordPieces(text)
+    for p in pieces {
+        if p.isWord && p.to > at {
+            return p.to
+        }
+    }
+    text.count
+}
+
+// The start of the next word after `at`: where Ctrl+Right goes on
+// Windows.
+public fn nextWordStart(_ text: String, _ at: Int) -> Int {
+    for p in wordPieces(text) {
+        if p.isWord && p.from > at {
+            return p.from
+        }
+    }
+    text.count
+}
+
+// The start of the word before `at` (of the word `at` is in, if it is past
+// that word's start): where Option+Left and Ctrl+Left go.
+public fn previousWordStart(_ text: String, _ at: Int) -> Int {
+    let pieces = wordPieces(text)
+    var k = pieces.count - 1
+    while k >= 0 {
+        let p = pieces[k]
+        if p.isWord && p.from < at {
+            return p.from
+        }
+        k -= 1
+    }
+    0
+}
+
+// ---- Sentences ----
+
+// CR, LF or Sep: the end of a paragraph.
+fn paraSep(_ v: Int) -> Bool { v == 1 || v == 2 || v == 4 }
+
+fn sentenceBreaksOf(_ cps: [Int]) -> [Int] {
+    let n = cps.count
+    var out: [Int] = [0]
+    if n == 0 {
+        return out
+    }
+    var sb: [Int] = []
+    for c in cps {
+        sb.append(sbOf(props(c)))
+    }
+    let j = joinIgnored(sb, [3, 5], [1, 2, 4])
+    let e = j.wb
+    let m = e.count
+    for i in 1..n {
+        let a = sb[i - 1]
+        let b = sb[i]
+        if a == 1 && b == 2 {
+            continue                                            // SB3
+        }
+        if paraSep(a) {
+            out.append(i)                                       // SB4
+            continue
+        }
+        let k = j.of[i]
+        if k < 0 {
+            continue                                            // SB5
+        }
+        let x = e[k - 1]
+        let y = e[k]
+        if x == 11 && y == 10 {
+            continue                                            // SB6
+        }
+        if k >= 2 && (e[k - 2] == 8 || e[k - 2] == 7) && x == 11 && y == 8 {
+            continue                                            // SB7
+        }
+        // Looking back for SATerm Close* Sp*.
+        var q = k - 1
+        var spaces = 0
+        while q >= 0 && e[q] == 6 {
+            q -= 1
+            spaces += 1
+        }
+        while q >= 0 && e[q] == 14 {
+            q -= 1
+        }
+        let term = if q >= 0 { e[q] } else { -1 }
+        if term == 11 {
+            // SB8: ATerm Close* Sp* × (¬(OLetter | Upper | Lower | ParaSep | SATerm))* Lower
+            var r = k
+            while r < m {
+                let v = e[r]
+                if v == 9 || v == 8 || v == 7 || paraSep(v) || v == 11 || v == 13 {
+                    break
+                }
+                r += 1
+            }
+            if r < m && e[r] == 7 {
+                continue
+            }
+        }
+        if term == 11 || term == 13 {
+            if y == 12 || y == 11 || y == 13 {
+                continue                                        // SB8a
+            }
+            if spaces == 0 && (y == 14 || y == 6 || paraSep(y)) {
+                continue                                        // SB9
+            }
+            if y == 6 || paraSep(y) {
+                continue                                        // SB10
+            }
+            out.append(i)                                       // SB11
+        }
+                                                                // SB998
+    }
+    out.append(n)
+    out
+}
+
+// Where `text` may be cut between sentences: after a full stop, question
+// or exclamation mark (with the closing quotes, brackets and spaces after
+// it), and after each line break. Not after the full stop of "3.5", "e.g.
+// this" or "U.S.A.", but after "Mr." before a capital: no simple rule
+// knows that one.
+public fn sentenceBreaks(_ text: String) -> [Int] {
+    sentenceBreaksOf(decode(text).cps)
+}
+
+// The sentences of `text`, each with the spaces after it.
+public fn sentences(_ text: String) -> [String] {
+    let d = decode(text)
+    piecesOf(d, sentenceBreaksOf(d.cps))
+}

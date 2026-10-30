@@ -1,0 +1,14 @@
+# What `tessel build` makes (and the IDE's Build and Package buttons).
+/text
+/text.exe
+*.app/
+.DS_Store
+
+# Netlify's link to the website project.
+.netlify/
+
+# Downloaded by tools/fetch.py, and the oracle's Python packages.
+tools/ucd/
+tools/hyph/
+tools/oracle/.venv/
+__pycache__/

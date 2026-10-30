@@ -1,0 +1,325 @@
+// text: characters as Unicode code points, their categories, and case
+// folding. Tessel's strings count characters as code points (`count`,
+// `substring`, `character(at:)`), so every position text gives is a code
+// point index that `substring` takes.
+//
+// The properties come from unicode_data.tsl, decoded once when a program
+// starts. Each code point has one number holding them all, in bits:
+//   0-4 General_Category      5-8 Grapheme_Cluster_Break
+//   9 Extended_Pictographic   10-11 Indic_Conjunct_Break
+//   12-16 Word_Break          17-20 Sentence_Break    21 White_Space
+// The values are numbered as in tools/gen/ucd.py.
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+// The Unicode version of the tables.
+public let unicodeVersion = "17.0.0"
+
+// The two-letter General_Category names, by their number.
+let categoryNames: [String] = ["Cn", "Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me", "Nd", "Nl", "No",
+    "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "Sm", "Sc", "Sk", "So",
+    "Zs", "Zl", "Zp", "Cc", "Cf", "Cs", "Co"]
+
+// The properties of the code points below 128, looked up most often.
+let asciiProps: [Int] = asciiTable()
+
+fn asciiTable() -> [Int] {
+    var out: [Int] = []
+    for c in 0..128 {
+        out.append(lookupProps(c))
+    }
+    out
+}
+
+// Numbers written as `digits` hexadecimal digits each, one after another,
+// in a list of strings (the tables in unicode_data.tsl).
+fn unpackHex(_ parts: [String], _ digits: Int) -> [Int] {
+    var out: [Int] = []
+    for part in parts {
+        let b = Data(text: part).bytes
+        var i = 0
+        while i + digits <= b.count {
+            var v = 0
+            for k in 0..digits {
+                let c = b[i + k]
+                v = v * 16 + (if c >= 97 { c - 87 } else { c - 48 })
+            }
+            out.append(v)
+            i += digits
+        }
+    }
+    out
+}
+
+// The property number of the code point c, by binary search of the ranges.
+fn lookupProps(_ c: Int) -> Int {
+    if c < 0 || c > 1114111 {
+        return 0
+    }
+    var lo = 0
+    var hi = ucdStarts.count - 1
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2
+        if ucdStarts[mid] <= c {
+            lo = mid
+        } else {
+            hi = mid - 1
+        }
+    }
+    ucdPalette[ucdIndex[lo]]
+}
+
+// The property number of the code point c.
+fn props(_ c: Int) -> Int {
+    if c >= 0 && c < 128 {
+        return asciiProps[c]
+    }
+    lookupProps(c)
+}
+
+fn gcOf(_ p: Int) -> Int { p % 32 }
+fn gcbOf(_ p: Int) -> Int { (p / 32) % 16 }
+fn pictOf(_ p: Int) -> Bool { (p / 512) % 2 == 1 }
+fn incbOf(_ p: Int) -> Int { (p / 1024) % 4 }
+fn wbOf(_ p: Int) -> Int { (p / 4096) % 32 }
+fn sbOf(_ p: Int) -> Int { (p / 131072) % 16 }
+fn spaceOf(_ p: Int) -> Bool { (p / 2097152) % 2 == 1 }
+
+// ---- Code points ----
+
+// The code points of `text`, in order.
+public fn codePoints(_ text: String) -> [Int] {
+    decode(text).cps
+}
+
+// The code point of the first character of `ch`, or -1 when it is "".
+public fn codePoint(_ ch: String) -> Int {
+    let b = Data(text: ch).bytes
+    if b.isEmpty {
+        return -1
+    }
+    let c = b[0]
+    if c < 128 {
+        return c
+    }
+    if c < 224 {
+        return (c - 192) * 64 + (b[1] - 128)
+    }
+    if c < 240 {
+        return ((c - 224) * 64 + (b[1] - 128)) * 64 + (b[2] - 128)
+    }
+    (((c - 240) * 64 + (b[1] - 128)) * 64 + (b[2] - 128)) * 64 + (b[3] - 128)
+}
+
+// The text made of the code points `cps`. Numbers that aren't code points
+// (negative, above 10FFFF, or a surrogate) become U+FFFD.
+public fn fromCodePoints(_ cps: [Int]) -> String {
+    var bytes: [Int] = []
+    for c in cps {
+        addUtf8(bytes, c)
+    }
+    Data(bytes: bytes).text ?? ""
+}
+
+// The UTF-8 bytes of the code point c, added to `bytes`.
+fn addUtf8(_ bytes: bind [Int], _ code: Int) {
+    var c = code
+    if c < 0 || c > 1114111 || (c >= 55296 && c <= 57343) {
+        c = 65533
+    }
+    if c < 128 {
+        bytes.append(c)
+    } else if c < 2048 {
+        bytes.append(192 + c / 64)
+        bytes.append(128 + c % 64)
+    } else if c < 65536 {
+        bytes.append(224 + c / 4096)
+        bytes.append(128 + (c / 64) % 64)
+        bytes.append(128 + c % 64)
+    } else {
+        bytes.append(240 + c / 262144)
+        bytes.append(128 + (c / 4096) % 64)
+        bytes.append(128 + (c / 64) % 64)
+        bytes.append(128 + c % 64)
+    }
+}
+
+// A text taken apart: its bytes, its code points, and where each code
+// point starts in the bytes (`at` has one more entry, the end).
+struct Decoded {
+    data: Data = Data()
+    cps: [Int] = []
+    at: [Int] = []
+
+    // The text of code points `from` up to `to`.
+    fn piece(_ from: Int, _ to: Int) -> String {
+        data.slice(from: at[from], to: at[to]).text ?? ""
+    }
+}
+
+fn decode(_ text: String) -> Decoded {
+    let data = Data(text: text)
+    let b = data.bytes
+    var cps: [Int] = []
+    var at: [Int] = []
+    var i = 0
+    let n = b.count
+    while i < n {
+        at.append(i)
+        let c = b[i]
+        if c < 128 {
+            cps.append(c)
+            i += 1
+        } else if c < 224 {
+            cps.append((c - 192) * 64 + (b[i + 1] - 128))
+            i += 2
+        } else if c < 240 {
+            cps.append(((c - 224) * 64 + (b[i + 1] - 128)) * 64 + (b[i + 2] - 128))
+            i += 3
+        } else {
+            cps.append((((c - 240) * 64 + (b[i + 1] - 128)) * 64 + (b[i + 2] - 128)) * 64 + (b[i + 3] - 128))
+            i += 4
+        }
+    }
+    at.append(n)
+    Decoded(data: data, cps: cps, at: at)
+}
+
+// ---- Categories ----
+
+// The General_Category of the code point c, as its two-letter name: "Lu"
+// (an uppercase letter), "Ll", "Nd" (a decimal digit), "Po" (other
+// punctuation), "Zs" (a space), "So" (other symbols, such as most emoji)
+// and so on. "Cn" for code points that aren't assigned.
+public fn category(_ c: Int) -> String {
+    categoryNames[gcOf(props(c))]
+}
+
+// Whether the code point c is a letter (category L…).
+public fn isLetter(_ c: Int) -> Bool {
+    let g = gcOf(props(c))
+    g >= 1 && g <= 5
+}
+
+// Whether c is an uppercase or titlecase letter (Lu, Lt).
+public fn isUppercase(_ c: Int) -> Bool {
+    let g = gcOf(props(c))
+    g == 1 || g == 3
+}
+
+// Whether c is a lowercase letter (Ll).
+public fn isLowercase(_ c: Int) -> Bool {
+    gcOf(props(c)) == 2
+}
+
+// Whether c is a combining mark (M…), such as the accent of e + ◌́.
+public fn isMark(_ c: Int) -> Bool {
+    let g = gcOf(props(c))
+    g >= 6 && g <= 8
+}
+
+// Whether c is a decimal digit (Nd) of any script: 0-9, ٠-٩, ०-९…
+public fn isDigit(_ c: Int) -> Bool {
+    gcOf(props(c)) == 9
+}
+
+// Whether c is a number of any kind (N…): digits, Roman numerals, ½, ²…
+public fn isNumber(_ c: Int) -> Bool {
+    let g = gcOf(props(c))
+    g >= 9 && g <= 11
+}
+
+// Whether c is punctuation (P…).
+public fn isPunctuation(_ c: Int) -> Bool {
+    let g = gcOf(props(c))
+    g >= 12 && g <= 18
+}
+
+// Whether c is a symbol (S…): math, currency, modifier and other symbols.
+public fn isSymbol(_ c: Int) -> Bool {
+    let g = gcOf(props(c))
+    g >= 19 && g <= 22
+}
+
+// Whether c is white space (the White_Space property): spaces, tabs, line
+// breaks, no-break space, the em and en spaces and the like.
+public fn isSpace(_ c: Int) -> Bool {
+    spaceOf(props(c))
+}
+
+// Whether c is a letter or a number: a character that can be part of a
+// word.
+public fn isAlphanumeric(_ c: Int) -> Bool {
+    let g = gcOf(props(c))
+    (g >= 1 && g <= 5) || (g >= 9 && g <= 11)
+}
+
+// ---- Case folding ----
+
+// The code points c folds to, or [] when it folds to itself.
+fn foldOf(_ c: Int) -> [Int] {
+    if c < 65 || (c > 90 && c < 181) {
+        return []
+    }
+    var lo = 0
+    var hi = foldFrom.count - 1
+    while lo <= hi {
+        let mid = (lo + hi) / 2
+        let v = foldFrom[mid]
+        if v == c {
+            let start = foldStart[mid]
+            let n = foldTo[start]
+            return foldTo.slice(from: start + 1, to: start + 1 + n)
+        }
+        if v < c {
+            lo = mid + 1
+        } else {
+            hi = mid - 1
+        }
+    }
+    []
+}
+
+// Where each entry of foldFrom starts in foldTo.
+let foldStart: [Int] = foldStarts()
+
+fn foldStarts() -> [Int] {
+    var out: [Int] = []
+    var i = 0
+    while i < foldTo.count {
+        out.append(i)
+        i += 1 + foldTo[i]
+    }
+    out
+}
+
+// `text` case folded: the form Unicode gives for comparing texts without
+// regard to case ("Straße", "STRASSE" and "strasse" all fold to "strasse";
+// Greek final and other sigmas to σ). Use it to compare or to look words
+// up; for showing text, use `lowercase()`.
+public fn caseFold(_ text: String) -> String {
+    let d = decode(text)
+    var bytes: [Int] = []
+    var changed = false
+    for c in d.cps {
+        let f = foldOf(c)
+        if f.isEmpty {
+            addUtf8(bytes, c)
+        } else {
+            changed = true
+            for x in f {
+                addUtf8(bytes, x)
+            }
+        }
+    }
+    if !changed {
+        return text
+    }
+    Data(bytes: bytes).text ?? text
+}
+
+// Whether `a` and `b` are the same text apart from case.
+public fn sameIgnoringCase(_ a: String, _ b: String) -> Bool {
+    a == b || caseFold(a) == caseFold(b)
+}

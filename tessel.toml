@@ -1,0 +1,12 @@
+# The version of Tessel this project uses: Tessel's commands, editors and
+# the IDE run it with this version, whatever version is installed (and
+# install it the first time). `tessel pin` changes it.
+tessel = "0.18.0"
+
+# What `tessel publish` publishes. Programs use the library by this name:
+# `tessel add text`, then `import text`.
+[library]
+name = "text"
+version = "0.1.0"
+description = "Text tools: Unicode characters, words and sentences, hyphenation and fuzzy matching"
+license = "MIT"

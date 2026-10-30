@@ -1,0 +1,371 @@
+// text's tests. First the cases in cases.json, written by
+// tools/oracle/oracle.py from other sources: the category of every code
+// point (UnicodeData.txt), white space, case folding, Unicode's own break
+// tests for grapheme clusters, words and sentences, hyphenation by pyphen
+// with the same patterns, and rapidfuzz's distances. Then the rest by hand.
+// `tessel run tests` prints the failures and a count, and exits with 1 if
+// any check failed.
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+import ".."
+
+struct CategoryRun {
+    from: Int
+    category: String
+}
+
+struct FoldCase {
+    text: String
+    folded: String
+}
+
+struct BreakCase {
+    text: String
+    breaks: [Int]
+}
+
+struct HyphenCase {
+    word: String
+    hyphenated: String
+}
+
+struct DistanceCase {
+    a: String
+    b: String
+    levenshtein: Int
+    osa: Int
+    ratio: Float
+    jaro: Float
+    jaroWinkler: Float
+}
+
+struct Cases {
+    categories: [CategoryRun]
+    spaces: [Int]
+    folds: [FoldCase]
+    graphemes: [BreakCase]
+    words: [BreakCase]
+    sentences: [BreakCase]
+    hyphens: [HyphenCase]
+    hyphensShort: [HyphenCase]
+    distances: [DistanceCase]
+}
+
+// Checks that `got` is true: 1 if it isn't.
+fn holds(_ name: String, _ got: Bool) -> Int {
+    if got {
+        print("ok    {name}")
+        return 0
+    }
+    print("FAIL  {name}")
+    1
+}
+
+// Checks that `got` is `expected`.
+fn same(_ name: String, _ got: String, _ expected: String) -> Int {
+    if got == expected {
+        print("ok    {name}: {got}")
+        return 0
+    }
+    print("FAIL  {name}: \"{got}\", expected \"{expected}\"")
+    1
+}
+
+// The code points of a text, written U+…, for messages.
+fn shown(_ s: String) -> String {
+    var parts: [String] = []
+    for c in text.codePoints(s) {
+        parts.append(hexOf(c))
+    }
+    parts.joined(separator: " ")
+}
+
+fn hexOf(_ c: Int) -> String {
+    let digits = "0123456789ABCDEF".characters
+    var out = ""
+    var v = c
+    while v > 0 || out.count < 4 {
+        out = digits[v % 16] + out
+        v = v / 16
+    }
+    out
+}
+
+// Reports how many of `count` cases of `name` failed (the first few shown
+// already).
+fn summary(_ name: String, _ count: Int, _ failed: Int) -> Int {
+    if failed == 0 {
+        print("ok    {name}: {count} cases")
+        return 0
+    }
+    print("FAIL  {name}: {failed} of {count} cases")
+    failed
+}
+
+fn listText(_ xs: [Int]) -> String {
+    var parts: [String] = []
+    for x in xs {
+        parts.append("{x}")
+    }
+    "[" + parts.joined(separator: ", ") + "]"
+}
+
+fn breakCases(_ name: String, _ cases: [BreakCase], _ cut: fn(String) -> [Int]) -> Int {
+    var failed = 0
+    for c in cases {
+        let got = cut(c.text)
+        if got != c.breaks {
+            failed += 1
+            if failed <= 5 {
+                print("  {name} of {shown(c.text)}: {listText(got)}, expected {listText(c.breaks)}")
+            }
+        }
+    }
+    summary("{name} (Unicode's tests)", cases.count, failed)
+}
+
+fn close(_ a: Float, _ b: Float) -> Bool {
+    let d = a - b
+    d < 1e-9 && d > -1e-9
+}
+
+fn oracle() -> Result<Int> {
+    var path = "tests/cases.json"
+    if !fileExists(path) {
+        path = "cases.json"
+    }
+    let cases: Cases = try decodeJson(try readText(path))
+    var failed = 0
+
+    // Every code point's category.
+    var wrong = 0
+    for (k, run) in cases.categories.enumerated() {
+        let to = if k + 1 < cases.categories.count { cases.categories[k + 1].from } else { 1114112 }
+        var c = run.from
+        while c < to {
+            let got = text.category(c)
+            if got != run.category {
+                wrong += 1
+                if wrong <= 5 {
+                    print("  category of U+{hexOf(c)}: {got}, expected {run.category}")
+                }
+            }
+            c += 1
+        }
+    }
+    failed += summary("category of all 1 114 112 code points", cases.categories.count, wrong)
+
+    var spaceSet: Set<Int> = []
+    for c in cases.spaces {
+        spaceSet.insert(c)
+    }
+    wrong = 0
+    for c in 0..1114112 {
+        if text.isSpace(c) != spaceSet.contains(c) {
+            wrong += 1
+        }
+    }
+    failed += summary("isSpace of all code points", cases.spaces.count, wrong)
+
+    wrong = 0
+    for f in cases.folds {
+        let got = text.caseFold(f.text)
+        if got != f.folded {
+            wrong += 1
+            if wrong <= 5 {
+                print("  caseFold of {shown(f.text)}: {shown(got)}, expected {shown(f.folded)}")
+            }
+        }
+    }
+    failed += summary("caseFold", cases.folds.count, wrong)
+
+    failed += breakCases("graphemeBreaks", cases.graphemes, { s in text.graphemeBreaks(s) })
+    failed += breakCases("wordBreaks", cases.words, { s in text.wordBreaks(s) })
+    failed += breakCases("sentenceBreaks", cases.sentences, { s in text.sentenceBreaks(s) })
+
+    let h = text.englishHyphenator()
+    wrong = 0
+    for c in cases.hyphens {
+        let got = h.hyphenate(c.word)
+        if got != c.hyphenated {
+            wrong += 1
+            if wrong <= 5 {
+                print("  hyphenate {c.word}: {got}, expected {c.hyphenated}")
+            }
+        }
+    }
+    failed += summary("hyphenate (pyphen, left 2, right 3)", cases.hyphens.count, wrong)
+    let h1 = text.englishHyphenator(left: 1, right: 1)
+    wrong = 0
+    for c in cases.hyphensShort {
+        let got = h1.hyphenate(c.word)
+        if got != c.hyphenated {
+            wrong += 1
+            if wrong <= 5 {
+                print("  hyphenate {c.word}: {got}, expected {c.hyphenated}")
+            }
+        }
+    }
+    failed += summary("hyphenate (pyphen, left 1, right 1)", cases.hyphensShort.count, wrong)
+
+    wrong = 0
+    for d in cases.distances {
+        var problem = ""
+        let lev = text.levenshtein(d.a, d.b)
+        if lev != d.levenshtein {
+            problem += " levenshtein {lev}, expected {d.levenshtein};"
+        }
+        let osa = text.damerauLevenshtein(d.a, d.b)
+        if osa != d.osa {
+            problem += " damerauLevenshtein {osa}, expected {d.osa};"
+        }
+        let r = text.similarity(d.a, d.b)
+        if !close(r, d.ratio) {
+            problem += " similarity {r}, expected {d.ratio};"
+        }
+        let j = text.jaro(d.a, d.b)
+        if !close(j, d.jaro) {
+            problem += " jaro {j}, expected {d.jaro};"
+        }
+        let jw = text.jaroWinkler(d.a, d.b)
+        if !close(jw, d.jaroWinkler) {
+            problem += " jaroWinkler {jw}, expected {d.jaroWinkler};"
+        }
+        if !problem.isEmpty {
+            wrong += 1
+            if wrong <= 5 {
+                print("  \"{d.a}\" / \"{d.b}\":{problem}")
+            }
+        }
+    }
+    failed += summary("distances (rapidfuzz)", cases.distances.count, wrong)
+    return .ok(failed)
+}
+
+fn strings(_ xs: [String]) -> String {
+    "[" + xs.joined(separator: "|") + "]"
+}
+
+fn byHand() -> Int {
+    var failed = 0
+    // Characters.
+    failed += holds("codePoint", text.codePoint("é") == 233 && text.codePoint("😀") == 128512 && text.codePoint("") == -1)
+    failed += same("fromCodePoints", text.fromCodePoints([104, 233, 128512, -5, 55296]), "hé😀" + text.fromCodePoints([65533, 65533]))
+    failed += holds("codePoints", text.codePoints("aé😀") == [97, 233, 128512])
+    failed += holds("isLetter", text.isLetter(text.codePoint("ж")) && text.isLetter(text.codePoint("東")) && !text.isLetter(text.codePoint("3")))
+    failed += holds("isDigit / isNumber", text.isDigit(text.codePoint("٣")) && !text.isDigit(text.codePoint("½")) && text.isNumber(text.codePoint("½")))
+    failed += holds("isUppercase / isLowercase", text.isUppercase(text.codePoint("Ǆ")) && text.isLowercase(text.codePoint("ß")) && !text.isUppercase(text.codePoint("a")))
+    failed += holds("isPunctuation / isSymbol / isMark", text.isPunctuation(text.codePoint("¿")) && text.isSymbol(text.codePoint("€")) && text.isMark(769))
+    failed += holds("sameIgnoringCase", text.sameIgnoringCase("STRASSE", "straße") && !text.sameIgnoringCase("a", "b"))
+    failed += same("unicodeVersion", text.unicodeVersion, "17.0.0")
+
+    // Grapheme clusters.
+    let accent = "e" + text.fromCodePoints([769])
+    failed += holds("graphemes with a combining accent", text.graphemes("caf" + accent) == ["c", "a", "f", accent])
+    failed += holds("graphemeCount of a family emoji", text.graphemeCount("👨‍👩‍👧") == 1 && "👨‍👩‍👧".count == 5)
+    failed += holds("graphemes of flags", text.graphemes("🇵🇭🇯🇵") == ["🇵🇭", "🇯🇵"])
+    failed += holds("graphemes of CR LF", text.graphemes("a\r\nb") == ["a", "\r\n", "b"])
+    failed += holds("graphemeBreaks of \"\"", text.graphemeBreaks("") == [0] && text.graphemes("").isEmpty)
+    let caret = "a👍🏽b"
+    failed += holds("nextGrapheme skips a skin tone", text.nextGrapheme(caret, 1) == 3 && text.nextGrapheme(caret, 3) == 4 && text.nextGrapheme(caret, 4) == 4)
+    failed += holds("previousGrapheme", text.previousGrapheme(caret, 3) == 1 && text.previousGrapheme(caret, 0) == 0)
+
+    // Words.
+    failed += same("words", strings(text.words("Don't stop: it's 3.5 m/s! e.g. 1,000 foo_bar")), "[Don't|stop|it's|3.5|m|s|e.g|1,000|foo_bar]")
+    failed += same("words of ideographs", strings(text.words("東京に行く")), "[東|京|に|行|く]")
+    failed += holds("wordCount", text.wordCount("  The quick (brown) fox — jumps!  ") == 5 && text.wordCount("") == 0)
+    let pieces = text.wordPieces("Hi, you")
+    failed += holds("wordPieces", pieces.count == 4 && pieces[0].isWord && !pieces[1].isWord && pieces[1].text == "," && pieces[3].from == 4 && pieces[3].to == 7)
+    let at = text.wordAt("one two", 5)
+    failed += holds("wordAt", at.text == "two" && at.from == 4 && text.wordAt("one two", 3).text == " " && text.wordAt("one two", 7).text == "two")
+    let line = "one, two three"
+    failed += holds("nextWordEnd", text.nextWordEnd(line, 0) == 3 && text.nextWordEnd(line, 3) == 8 && text.nextWordEnd(line, 14) == 14)
+    failed += holds("nextWordStart", text.nextWordStart(line, 0) == 5 && text.nextWordStart(line, 9) == 14)
+    failed += holds("previousWordStart", text.previousWordStart(line, 14) == 9 && text.previousWordStart(line, 9) == 5 && text.previousWordStart(line, 2) == 0)
+
+    // Sentences.
+    failed += same("sentences", strings(text.sentences("He said \"Hi.\" Then he left. It is 3.5 m. e.g. this one? Yes!\nNext")),
+        "[He said \"Hi.\" |Then he left. |It is 3.5 m. e.g. this one? |Yes!\n|Next]")
+    failed += holds("sentences of \"\"", text.sentences("").isEmpty)
+
+    // Hyphenation.
+    let h = text.englishHyphenator()
+    failed += same("hyphenate", h.hyphenate("hyphenation"), "hy-phen-ation")
+    failed += same("hyphenate keeps case", h.hyphenate("Reinforcement"), "Re-in-force-ment")
+    failed += same("hyphenate an exception", h.hyphenate("associates") + " " + h.hyphenate("project") + " " + h.hyphenate("table"), "as-so-ciates project ta-ble")
+    failed += holds("points", h.points("hyphenation") == [2, 6] && h.points("cat").isEmpty && h.points("don't").isEmpty)
+    failed += holds("parts", h.parts("structural") == ["struc", "tural"] && h.parts("a") == ["a"])
+    failed += same("hyphenateText", h.hyphenateText("Reinforced concrete beams, don't they?", with: "-"), "Re-in-forced con-crete beams, don't they?")
+    failed += holds("hyphenateText with soft hyphens", h.hyphenateText("concrete") == "con" + text.softHyphen() + "crete")
+    let own = text.hyphenator(patterns: "1ba 1na", exceptions: "ba-na-na", left: 1, right: 1)
+    failed += same("hyphenator from patterns", own.hyphenate("abana") + " " + own.hyphenate("banana"), "a-ba-na ba-na-na")
+    let tex = "% a comment\n\\patterns\{ % more\n1ba 1na\n}\n\\hyphenation\{ba-na-na}\n"
+    if let fromTex = text.hyphenatorFromTex(tex, left: 1, right: 1) {
+        failed += same("hyphenatorFromTex", fromTex.hyphenate("abana") + " " + fromTex.hyphenate("banana"), "a-ba-na ba-na-na")
+    } else {
+        failed += holds("hyphenatorFromTex", false)
+    }
+    failed += holds("hyphenatorFromTex without \\patterns", text.hyphenatorFromTex("nothing here") == nil)
+
+    // Distances and matching.
+    failed += holds("levenshtein", text.levenshtein("kitten", "sitting") == 3 && text.levenshtein("", "abc") == 3 && text.levenshtein("é", "e") == 1)
+    failed += holds("damerauLevenshtein", text.damerauLevenshtein("teh", "the") == 1 && text.levenshtein("teh", "the") == 2)
+    failed += holds("similarity", close(text.similarity("", ""), 1.0) && close(text.similarity("abc", "xyz"), 0.0))
+    failed += same("closest", strings(text.closest("lenght", ["length", "height", "width"])), "[length|height]")
+    failed += same("closest ignores case", strings(text.closest("BEEM", ["beam", "Beem", "bee"], limit: 1)), "[Beem]")
+    if let m = text.fuzzyMatch("opfl", "Open File") {
+        failed += holds("fuzzyMatch positions", m.positions == [0, 1, 5, 7])
+    } else {
+        failed += holds("fuzzyMatch", false)
+    }
+    failed += holds("fuzzyMatch misses", text.fuzzyMatch("xyz", "Open File") == nil && text.fuzzyMatch("open files", "Open File") == nil)
+    if let m = text.fuzzyMatch("of", "Open File") {
+        failed += holds("fuzzyMatch prefers word starts", m.positions == [0, 5])
+    } else {
+        failed += holds("fuzzyMatch word starts", false)
+    }
+    failed += same("fuzzyFilter", strings(text.fuzzyFilter("of", ["proof", "Open File", "Toggle Fold", "nothing"])), "[Open File|Toggle Fold|proof]")
+    failed += same("fuzzyFilter of a camel case name", strings(text.fuzzyFilter("gbn", ["getBoundingName", "gobbling", "gbn_old"])), "[gbn_old|getBoundingName|gobbling]")
+    failed += holds("fuzzyFilter with an empty pattern keeps all", text.fuzzyFilter("", ["b", "a"]) == ["b", "a"])
+    failed
+}
+
+fn speed() -> Int {
+    var parts: [String] = []
+    for k in 0..4000 {
+        parts.append("Sentence {k} of the report says the beam's depth is {k % 97}.5 mm, café-style; is it? Yes! ")
+    }
+    let long = parts.joined()
+    let chars = long.count
+    let t0 = now()
+    let n = text.wordCount(long)
+    let t1 = now() - t0
+    var failed = holds("wordCount of {chars} characters in {t1.formatted(decimals: 3)} s", n == 4000 * 17 && t1 < 5.0)
+    let t2 = now()
+    let s = text.sentences(long)
+    let t3 = now() - t2
+    failed += holds("sentences of {chars} characters in {t3.formatted(decimals: 3)} s", s.count == 8000 && t3 < 5.0)
+    let t4 = now()
+    let g = text.graphemeCount(long)
+    let t5 = now() - t4
+    failed += holds("graphemeCount of {chars} characters in {t5.formatted(decimals: 3)} s", g == chars && t5 < 5.0)
+    let h = text.englishHyphenator()
+    let t6 = now()
+    let out = h.hyphenateText(long, with: "-")
+    let t7 = now() - t6
+    failed += holds("hyphenateText of {chars} characters in {t7.formatted(decimals: 3)} s", out.count > chars && t7 < 10.0)
+    failed
+}
+
+fn main() {
+    var failed = try oracle()
+    failed += byHand()
+    failed += speed()
+    if failed > 0 {
+        print("\n{failed} failed")
+        exit(1)
+    }
+    print("\nall passed")
+}

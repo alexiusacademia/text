@@ -1,0 +1,218 @@
+// text: hyphenation with Liang's patterns, the method TeX, LibreOffice and
+// browsers use. `englishHyphenator()` has the American English patterns of
+// TeX (hyphen_en.tsl); `hyphenator` and `hyphenatorFromTex` take the
+// patterns of any language, as the hyph-utf8 package has them.
+//
+// A pattern is letters with digits between them: "an3te" says that a
+// break between "n" and "t" of "ante" scores 3. Every pattern found in a
+// word (with "." marking its ends) scores the places it covers, the
+// highest score wins, and the word may break where the score is odd.
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+// The soft hyphen, U+00AD: a hyphen that shows only where a line breaks.
+public fn softHyphen() -> String {
+    fromCodePoints([173])
+}
+
+// Patterns and exceptions for one language. `left` and `right` are the
+// fewest letters kept before the first break and after the last one (2
+// and 3 for English: "ab-sorb" but not "a-bout" or "read-er").
+public struct Hyphenator {
+    // For each pattern's letters, the scores before each letter and after
+    // the last (one more than the letters).
+    patterns: [String: [Int]] = [:]
+    // Words hyphenated by hand, in lower case: the places they break.
+    exceptions: [String: [Int]] = [:]
+    // The most letters in a pattern.
+    longest: Int = 0
+    left: Int = 2
+    right: Int = 3
+
+    // The places where `word` may break: code point indexes into it, so
+    // points("hyphenation") is [2, 6] (hy-phen-ation). [] for a word too
+    // short to break or with anything but letters in it.
+    fn points(_ word: String) -> [Int] {
+        let chars = word.characters
+        let n = chars.count
+        if n < left + right || n < 2 {
+            return []
+        }
+        var lower: [String] = []
+        for ch in chars {
+            if !isLetter(codePoint(ch)) {
+                return []
+            }
+            let l = ch.lowercase()
+            lower.append(if l.count == 1 { l } else { ch })
+        }
+        let key = lower.joined()
+        if let found = exceptions[key] {
+            var out: [Int] = []
+            for p in found {
+                if p >= left && p <= n - right {
+                    out.append(p)
+                }
+            }
+            return out
+        }
+        var w: [String] = ["."]
+        for l in lower {
+            w.append(l)
+        }
+        w.append(".")
+        let m = w.count
+        var score: [Int] = []
+        for k in 0..(m + 1) {
+            score.append(0)
+        }
+        for i in 0..m {
+            var part = ""
+            var l = 0
+            while l < longest && i + l < m {
+                part += w[i + l]
+                l += 1
+                if let values = patterns[part] {
+                    for (k, v) in values.enumerated() {
+                        if v > score[i + k] {
+                            score[i + k] = v
+                        }
+                    }
+                }
+            }
+        }
+        // A break between letters p - 1 and p of the word is before letter
+        // p + 1 of w.
+        var out: [Int] = []
+        for p in left..(n - right + 1) {
+            if score[p + 1] % 2 == 1 {
+                out.append(p)
+            }
+        }
+        out
+    }
+
+    // `word` with `with` at each place it may break:
+    // hyphenate("hyphenation") is "hy-phen-ation".
+    fn hyphenate(_ word: String, with: String = "-") -> String {
+        parts(word).joined(separator: with)
+    }
+
+    // `word` cut at each place it may break: ["hy", "phen", "ation"].
+    fn parts(_ word: String) -> [String] {
+        let ps = points(word)
+        if ps.isEmpty {
+            return [word]
+        }
+        var out: [String] = []
+        var from = 0
+        for p in ps {
+            out.append(word.substring(from: from, to: p))
+            from = p
+        }
+        out.append(word.substring(from: from, to: word.count))
+        out
+    }
+
+    // `text` with `with` (a soft hyphen if not given) at each place its
+    // words may break, for text that a layout breaks into lines. Words
+    // with anything but letters in them ("don't", "3rd") are left whole.
+    fn hyphenateText(_ text: String, with: String = softHyphen()) -> String {
+        var out = ""
+        for p in wordPieces(text) {
+            if p.isWord {
+                out += hyphenate(p.text, with: with)
+            } else {
+                out += p.text
+            }
+        }
+        out
+    }
+}
+
+// The letters of a pattern and its scores: "an3te" is "ante" and
+// [0, 0, 3, 0, 0].
+fn parsePattern(_ pattern: String) -> (String, [Int]) {
+    var letters = ""
+    var scores: [Int] = [0]
+    for ch in pattern.characters {
+        let c = codePoint(ch)
+        if c >= 48 && c <= 57 {
+            scores[scores.count - 1] = c - 48
+        } else {
+            letters += ch
+            scores.append(0)
+        }
+    }
+    (letters, scores)
+}
+
+// A hyphenator from `patterns` (separated by spaces or line breaks) and
+// `exceptions`, words with hyphens where they break ("ta-ble"); a word
+// without a hyphen never breaks.
+public fn hyphenator(patterns: String, exceptions: String = "", left: Int = 2, right: Int = 3) -> Hyphenator {
+    var h = Hyphenator(left: left, right: right)
+    for p in patterns.words() {
+        let (letters, scores) = parsePattern(p)
+        h.patterns[letters] = scores
+        if letters.count > h.longest {
+            h.longest = letters.count
+        }
+    }
+    for e in exceptions.words() {
+        var at: [Int] = []
+        var n = 0
+        var word = ""
+        for ch in e.characters {
+            if ch == "-" {
+                at.append(n)
+            } else {
+                word += ch.lowercase()
+                n += 1
+            }
+        }
+        h.exceptions[word] = at
+    }
+    h
+}
+
+// A hyphenator from a TeX pattern file such as hyph-de-1996.tex of the
+// hyph-utf8 package: the words of its \patterns{…} and \hyphenation{…},
+// without % comments. nil when it has no \patterns.
+public fn hyphenatorFromTex(_ tex: String, left: Int = 2, right: Int = 3) -> Hyphenator? {
+    var body: [String] = []
+    for line in tex.lines() {
+        if let k = line.find("%") {
+            body.append(line.substring(from: 0, to: k))
+        } else {
+            body.append(line)
+        }
+    }
+    let all = body.joined(separator: "\n")
+    if let patterns = texGroup(all, "\\patterns") {
+        return hyphenator(patterns: patterns, exceptions: texGroup(all, "\\hyphenation") ?? "", left: left, right: right)
+    }
+    nil
+}
+
+// What is between the braces after `command` in `tex`.
+fn texGroup(_ tex: String, _ command: String) -> String? {
+    if let at = tex.find(command) {
+        let rest = tex.substring(from: at + command.count, to: tex.count)
+        if let open = rest.find("\{") {
+            let inside = rest.substring(from: open + 1, to: rest.count)
+            if let close = inside.find("}") {
+                return inside.substring(from: 0, to: close)
+            }
+        }
+    }
+    nil
+}
+
+// The American English hyphenator, with TeX's patterns (the 4,938 of
+// hyph-en-us.tex, Knuth's and Kuiken's) and their exceptions. Making it
+// reads all the patterns, so make it once and keep it.
+public fn englishHyphenator(left: Int = 2, right: Int = 3) -> Hyphenator {
+    hyphenator(patterns: englishPatterns().joined(separator: " "), exceptions: englishExceptions(), left: left, right: right)
+}
