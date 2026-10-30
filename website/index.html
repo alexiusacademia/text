@@ -1,0 +1,316 @@
+<!doctype html>
+<!--
+  text's website: https://text-package.syncster.dev
+  Author: Alexius Academia
+  Date: 2026-10-31
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="author" content="Alexius Academia">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>text · Text tools for Tessel</title>
+  <meta name="description" content="text is a Tessel library for working with text: Unicode characters and normalization, words and sentences, hyphenation, spelling, fuzzy matching, stemming, search and readability.">
+  <meta name="theme-color" content="#6d3fd1">
+  <link rel="canonical" href="https://text-package.syncster.dev/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="text">
+  <meta property="og:title" content="text · Text tools for Tessel">
+  <meta property="og:description" content="Words, sentences and characters by Unicode's rules, hyphenation, spelling, fuzzy matching, stemming, search and readability for Tessel. Checked against Unicode's own tests and Python libraries.">
+  <meta property="og:url" content="https://text-package.syncster.dev/">
+  <meta property="og:image" content="https://text-package.syncster.dev/assets/share.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="The text library's name with a sentence split into words and a hyphenated word">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#6d3fd1"/><path d="M9 10 H23 M16 10 V23" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M20 21 H25" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+      text <small>for Tessel</small>
+    </a>
+    <nav>
+      <a href="#examples">Examples</a>
+      <a href="#tested" class="optional">Tested</a>
+      <a href="#reference">Reference</a>
+      <a href="https://github.com/alexiusacademia/text">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<div class="hero">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">A Tessel library</p>
+      <h1>Words, sentences and characters, the way Unicode defines them.</h1>
+      <p class="lede">Split text into what a reader calls characters, words and sentences. Normalize it, hyphenate it, check its spelling, match what someone half-typed, search it, and score how hard it is to read. Every part is checked against Unicode's own test files or a Python library.</p>
+      <div class="install">
+        <code>tessel add text</code>
+        <button class="copy" type="button" data-copy="tessel add text">Copy</button>
+      </div>
+      <div class="buttons">
+        <a class="button primary" href="#examples">See examples</a>
+        <a class="button" href="https://github.com/alexiusacademia/text">Code on GitHub</a>
+      </div>
+      <p class="meta">MIT licence · Tessel 0.18 or later · no dependencies · Unicode 17</p>
+    </div>
+    <div class="preview">
+      <div class="panel">
+        <header><b>text.words</b> and <b>misspellings</b></header>
+        <p class="marked"><span class="w">Don't</span> <span class="w">skip</span> <span class="w">it</span>: <span class="w">the</span> <span class="w">beam's</span> <span class="w">depth</span> <span class="w">is</span> <span class="w">3.5</span> <span class="w">m</span>. <span class="w bad">Chekc</span> <span class="w">e.g</span>. <span class="w">the</span> <span class="w">1,000</span> <span class="w">kN</span> <span class="w">case</span>! 👨‍👩‍👧</p>
+      </div>
+      <div class="arrow">↓ the same text, measured</div>
+      <div class="panel">
+        <header><b>What text gives</b></header>
+        <ul class="facts">
+          <li><b>graphemeCount</b>("👨‍👩‍👧") → 1, where <code>count</code> gives 5</li>
+          <li><b>hyphenate</b>("reinforcement") → re-in-force-ment</li>
+          <li><b>suggest</b>("Chekc") → Check, …</li>
+          <li><b>stem</b>("bending") → bend</li>
+          <li><b>nfkc</b>("ﬁle №２") → file No2</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="examples">
+  <div class="wrap">
+    <h2>Examples</h2>
+    <p class="intro">Every output below was printed by running the code with the library.</p>
+
+    <div class="examples">
+
+      <article class="example">
+        <h3>Words and sentences</h3>
+        <p>Unicode's rules keep "don't", "3.5" and "1,000" whole, give each Chinese or Japanese character a word of its own, and don't end a sentence at "3.5" or "e.g.".</p>
+<pre class="tsl">let note = "Don't skip it: the beam's depth is 3.5 m. Check e.g. the 1,000 kN case first! 👨‍👩‍👧 approves."
+print(text.words(note))
+print(text.wordCount(note))
+print(text.sentences(note))</pre>
+        <div class="out"><pre>["Don't", "skip", "it", "the", "beam's", "depth", "is", "3.5", "m", "Check", "e.g", "the", "1,000", "kN", "case", "first", "approves"]
+17
+["Don't skip it: the beam's depth is 3.5 m. ", "Check e.g. the 1,000 kN case first! ", "👨‍👩‍👧 approves."]</pre></div>
+      </article>
+
+      <article class="example">
+        <h3>Characters as a reader counts them</h3>
+        <p>Tessel counts code points. A family emoji is five of them but one character to a reader, so carets and Backspace should move with <code>nextGrapheme</code> and <code>previousGrapheme</code>.</p>
+<pre class="tsl">print("👨‍👩‍👧".count)
+print(text.graphemeCount("👨‍👩‍👧"))
+print(text.graphemes("ñ👍🏽🇵🇭"))</pre>
+        <div class="out"><pre>5
+1
+["ñ", "👍🏽", "🇵🇭"]</pre></div>
+      </article>
+
+      <article class="example">
+        <h3>Hyphenation</h3>
+        <p>TeX's American English patterns and Liang's method. <code>hyphenateText</code> puts soft hyphens into a whole text for a layout to break at.</p>
+<pre class="tsl">let h = text.englishHyphenator()
+print(h.hyphenate("reinforcement"))
+print(h.parts("hyphenation"))</pre>
+        <div class="out"><pre>re-in-force-ment
+["hy", "phen", "ation"]</pre></div>
+      </article>
+
+      <article class="example">
+        <h3>Spelling</h3>
+        <p>The spell checker from the Quill word processor: the system's word list plus English endings, with suggestions ranked by how likely each slip is.</p>
+<pre class="tsl">var sp = text.speller(text.systemWordList(), user: "Tessel\n")
+for m in sp.misspellings("Teh beam was stoped by Tessel's sensor.") {
+    print("{m.word} at {m.from}-{m.to}: {sp.suggest(m.word, limit: 3)}")
+}
+print(text.autocorrect(text.autocorrectDefaults(), "Teh") ?? "-")</pre>
+        <div class="out"><pre>Teh at 0-3: ["The", "Ten", "Tea"]
+stoped at 13-19: ["stopped", "stiped", "stooped"]
+The</pre></div>
+      </article>
+
+      <article class="example">
+        <h3>Fuzzy matching</h3>
+        <p>"Did you mean", and a command palette that finds "Open File" from "opfl".</p>
+<pre class="tsl">print(text.levenshtein("kitten", "sitting"))
+print(text.closest("lenght", ["length", "height", "width"]))
+print(text.fuzzyFilter("opfl", ["Open File", "Open Folder", "Copy File", "Toggle Fold"]))</pre>
+        <div class="out"><pre>3
+["length", "height"]
+["Open File", "Open Folder", "Copy File"]</pre></div>
+      </article>
+
+      <article class="example">
+        <h3>Normalization</h3>
+        <p>"é" can be one code point or two. <code>nfc</code> makes them the same, and <code>nfkc</code> also turns ligatures and full-width letters into plain ones.</p>
+<pre class="tsl">let typed = "Cafe" + text.fromCodePoints([769])
+print(typed == "Café")
+print(text.nfc(typed) == "Café")
+print(text.nfkc("ﬁle №２"))</pre>
+        <div class="out"><pre>false
+true
+file No2</pre></div>
+      </article>
+
+      <article class="example">
+        <h3>Search</h3>
+        <p>BM25 ranking, as in Lucene, with stemming and stopwords. Phrases go in quotes, and <code>prefix: true</code> searches while the user types.</p>
+<pre class="tsl">var help = text.SearchIndex()
+let pages = [
+    "Simply supported beams: bending moment and shear force diagrams.",
+    "Reinforced concrete columns under axial load and bending.",
+    "Steel beam connections: bolted and welded.",
+    "The moment of inertia of a section.",
+]
+for p in pages {
+    let ignored = help.add(p)
+}
+for hit in help.search("beam bending") {
+    print("{hit.document} {hit.score.formatted(decimals: 3)}  {pages[hit.document]}")
+}
+print(help.search("\"bending moment\"").count)
+print(help.search("reinf", prefix: true)[0].document)</pre>
+        <div class="out"><pre>0 0.531  Simply supported beams: bending moment and shear force diagrams.
+2 0.327  Steel beam connections: bolted and welded.
+1 0.304  Reinforced concrete columns under axial load and bending.
+1
+1</pre></div>
+      </article>
+
+      <article class="example">
+        <h3>Stems and readability</h3>
+        <p>Snowball's English stemmer, and the Flesch formulas with syllables counted by spelling rules.</p>
+<pre class="tsl">print(text.stems("The engineers were checking the bending of reinforced beams"))
+let st = text.textStats("The cat sat on the mat. It was happy. Readability formulas estimate the education needed to understand a passage.")
+print("{st.sentences} sentences, {st.words} words, {st.syllables} syllables")
+print(st.fleschReadingEase().formatted(decimals: 1))
+print(st.fleschKincaidGrade().formatted(decimals: 1))</pre>
+        <div class="out"><pre>["the", "engin", "were", "check", "the", "bend", "of", "reinforc", "beam"]
+3 sentences, 19 words, 35 syllables
+44.6
+8.6</pre></div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<section id="tested">
+  <div class="wrap">
+    <h2>Checked against the sources</h2>
+    <p class="intro">A script reads Unicode's data and test files, runs Python libraries, and saves what they give for the tests to compare against: <code>tessel run tests</code> checks it all in about seven seconds.</p>
+    <div class="stats">
+      <div class="stat"><b>1,114,112</b><span>code points, each with the category UnicodeData.txt gives it</span></div>
+      <div class="stat"><b>3,222</b><span>cases of Unicode's own grapheme, word and sentence break tests</span></div>
+      <div class="stat"><b>20,034</b><span>cases of Unicode's NormalizationTest.txt</span></div>
+      <div class="stat"><b>42,649</b><span>words stemmed exactly as Snowball's own list has them</span></div>
+      <div class="stat"><b>14,000</b><span>words hyphenated as pyphen does with the same patterns</span></div>
+      <div class="stat"><b>400</b><span>search queries scored as bm25s scores them</span></div>
+      <div class="stat"><b>1,509</b><span>pairs of distances as rapidfuzz gives them</span></div>
+      <div class="stat"><b>10 ms</b><span>to count the words of 100 pages</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="reference">
+  <div class="wrap">
+    <h2>Reference</h2>
+    <p class="intro">Positions are code point indexes, the ones Tessel's <code>substring</code> takes. The <a href="https://github.com/alexiusacademia/text#readme">README</a> has more detail.</p>
+
+    <h3>Characters and normalization</h3>
+    <div class="table"><table>
+      <tr><th>Function</th><th>Gives</th></tr>
+      <tr><td><code>codePoints(s)</code>, <code>codePoint(ch)</code>, <code>fromCodePoints(cps)</code></td><td>Text to code points and back.</td></tr>
+      <tr><td><code>category(c)</code></td><td>The General_Category: <code>"Lu"</code>, <code>"Nd"</code>, <code>"Po"</code>…</td></tr>
+      <tr><td><code>isLetter</code>, <code>isUppercase</code>, <code>isLowercase</code>, <code>isMark</code>, <code>isDigit</code>, <code>isNumber</code>, <code>isPunctuation</code>, <code>isSymbol</code>, <code>isSpace</code>, <code>isAlphanumeric</code></td><td>What kind of character a code point is.</td></tr>
+      <tr><td><code>caseFold(s)</code>, <code>sameIgnoringCase(a, b)</code></td><td>Comparing without case: "Straße" and "STRASSE" are the same.</td></tr>
+      <tr><td><code>nfc</code>, <code>nfd</code>, <code>nfkc</code>, <code>nfkd</code>, <code>combiningClass</code></td><td>Unicode normalization forms.</td></tr>
+    </table></div>
+
+    <h3>Splitting</h3>
+    <div class="table"><table>
+      <tr><th>Function</th><th>Gives</th></tr>
+      <tr><td><code>graphemes</code>, <code>graphemeCount</code>, <code>graphemeBreaks</code></td><td>Characters as a reader counts them.</td></tr>
+      <tr><td><code>nextGrapheme(s, at)</code>, <code>previousGrapheme(s, at)</code></td><td>Where arrow keys and Backspace go.</td></tr>
+      <tr><td><code>words</code>, <code>wordCount</code>, <code>wordPieces</code>, <code>wordBreaks</code>, <code>wordAt(s, at)</code></td><td>Words, and every piece between word breaks with <code>from</code>, <code>to</code> and <code>isWord</code>.</td></tr>
+      <tr><td><code>nextWordEnd</code>, <code>nextWordStart</code>, <code>previousWordStart</code></td><td>Moving by words with Option or Ctrl.</td></tr>
+      <tr><td><code>sentences</code>, <code>sentenceBreaks</code></td><td>Sentences, each with the spaces after it.</td></tr>
+    </table></div>
+
+    <h3>Hyphenation and spelling</h3>
+    <div class="table"><table>
+      <tr><th>Function</th><th>Gives</th></tr>
+      <tr><td><code>englishHyphenator(left:, right:)</code></td><td>A <code>Hyphenator</code> with <code>points</code>, <code>hyphenate</code>, <code>parts</code> and <code>hyphenateText</code>.</td></tr>
+      <tr><td><code>hyphenator(patterns:, exceptions:)</code>, <code>hyphenatorFromTex(tex)</code></td><td>Any language's patterns, such as those of hyph-utf8.</td></tr>
+      <tr><td><code>speller(wordList, user:)</code>, <code>systemWordList()</code></td><td>A <code>Speller</code> with <code>isCorrect</code>, <code>suggest</code>, <code>misspellings</code>, <code>addWord</code>, <code>ignoreAll</code>, <code>ignoreOnce</code> and <code>resetIgnored</code>.</td></tr>
+      <tr><td><code>autocorrect(table, word)</code>, <code>autocorrectDefaults()</code></td><td>About 140 typing slips put right, capitals kept.</td></tr>
+    </table></div>
+
+    <h3>Matching, search and readability</h3>
+    <div class="table"><table>
+      <tr><th>Function</th><th>Gives</th></tr>
+      <tr><td><code>levenshtein</code>, <code>damerauLevenshtein</code>, <code>similarity</code>, <code>jaro</code>, <code>jaroWinkler</code></td><td>How alike two texts are.</td></tr>
+      <tr><td><code>closest(word, choices)</code>, <code>fuzzyMatch(pattern, item)</code>, <code>fuzzyFilter(pattern, items)</code></td><td>"Did you mean", and matching typed letters in order.</td></tr>
+      <tr><td><code>stem(word)</code>, <code>stems(text)</code></td><td>Snowball English stems.</td></tr>
+      <tr><td><code>SearchIndex</code></td><td><code>add</code>, <code>search(query, limit:, prefix:)</code>, <code>addTerms</code>, <code>searchTerms</code>.</td></tr>
+      <tr><td><code>textStats(text)</code>, <code>syllables(word)</code></td><td><code>TextStats</code> with Flesch, Flesch-Kincaid, Gunning fog, SMOG, Coleman-Liau, ARI and reading time.</td></tr>
+    </table></div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>text · MIT licence · © 2026 <a href="https://syncster.dev" rel="author">Alexius Academia</a> · <a href="mailto:admin@syncster.dev">admin@syncster.dev</a> · <a href="https://syncster.dev">syncster.dev</a></span>
+    <nav>
+      <a href="https://github.com/alexiusacademia/text">GitHub</a>
+      <a href="https://tessel-lang.syncster.dev">Tessel</a>
+      <a href="https://tessel-packages.syncster.dev">Libraries</a>
+      <a href="https://tessel-lang.syncster.dev/guides/libraries/">Libraries guide</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+// Colours the Tessel code (keywords, strings, numbers, comments).
+(function () {
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const keywords = /^(import|fn|var|let|if|else|for|in|while|return|match|try|true|false|nil)$/;
+  const token = /(\/\/[^\n]*)|("(?:\\.|[^"\\])*")|(\b\d+(?:\.\d+)?(?:e-?\d+)?\b)|([A-Za-z_]\w*)/g;
+  for (const pre of document.querySelectorAll("pre.tsl")) {
+    const text = pre.textContent;
+    let out = "", last = 0, m;
+    token.lastIndex = 0;
+    while ((m = token.exec(text))) {
+      out += esc(text.slice(last, m.index));
+      const t = esc(m[0]);
+      if (m[1]) out += '<span class="c">' + t + "</span>";
+      else if (m[2]) out += '<span class="s">' + t + "</span>";
+      else if (m[3]) out += '<span class="n">' + t + "</span>";
+      else if (keywords.test(m[4])) out += '<span class="k">' + t + "</span>";
+      else out += t;
+      last = token.lastIndex;
+    }
+    pre.innerHTML = out + esc(text.slice(last));
+  }
+  for (const b of document.querySelectorAll("[data-copy]")) {
+    b.addEventListener("click", () => {
+      navigator.clipboard.writeText(b.dataset.copy).then(() => {
+        b.textContent = "Copied";
+        setTimeout(() => { b.textContent = "Copy"; }, 1500);
+      }, () => {});
+    });
+  }
+})();
+</script>
+</body>
+</html>
