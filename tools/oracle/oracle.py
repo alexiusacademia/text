@@ -21,6 +21,9 @@
 # - distances: rapidfuzz's Levenshtein, OSA, Indel ratio and Jaro-Winkler.
 # - stems: Snowball's English test list (voc.txt → output.txt), which the
 #   snowballstemmer package is checked to agree with too.
+# - normalization: Unicode's NormalizationTest.txt, all parts, as five
+#   texts a case; and the code points of Part 1, since every other one
+#   must stay as it is in all four forms.
 # - search: BM25 scores of bm25s (method "lucene", k1 1.2, b 0.75, 64-bit)
 #   for 400 queries over 300 documents (the best 30 of each) of made-up words.
 # - syllables: the CMU Pronouncing Dictionary's counts, for how often the
@@ -198,6 +201,25 @@ def distances():
     return out
 
 
+def normalization():
+    cases, part1 = [], []
+    part = ""
+    for line in open(os.path.join(UCD, "NormalizationTest.txt"), encoding="utf-8"):
+        if line.startswith("@"):
+            part = line.split()[0]
+            continue
+        line = line.split("#")[0].strip()
+        if not line:
+            continue
+        cols = [c.strip() for c in line.split(";")][:5]
+        texts = ["".join(chr(int(x, 16)) for x in c.split()) for c in cols]
+        cases.append(texts)
+        if part == "@Part1":
+            part1.append(int(cols[0], 16))
+    print("normalization: %d cases, %d code points in Part 1" % (len(cases), len(part1)))
+    return {"cases": cases, "changed": part1}
+
+
 def stems():
     import snowballstemmer
     st = snowballstemmer.stemmer("english")
@@ -286,6 +308,7 @@ def main():
         "hyphensShort": hy1,
         "distances": distances(),
         "stems": stems(),
+        "normalization": normalization(),
         "search": search(),
         "syllables": syllables(),
     }

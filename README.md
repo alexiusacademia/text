@@ -1,8 +1,9 @@
 # text
 
 Text tools for [Tessel](https://tessel-lang.syncster.dev) programs:
-characters as a reader sees them, words and sentences, hyphenation, fuzzy
-matching, stemming, full-text search and readability scores. It follows Unicode 17's rules, and the results are checked
+characters as a reader sees them, normalization, words and sentences,
+hyphenation, spelling, fuzzy matching, stemming, full-text search and
+readability scores. It follows Unicode 17's rules, and the results are checked
 against Unicode's own test files and against Python libraries.
 
 ```tessel
@@ -63,8 +64,29 @@ so carets and Backspace should move by `nextGrapheme` and
 | `category(_ c: Int) -> String` | The General_Category: `"Lu"`, `"Ll"`, `"Nd"`, `"Po"`, `"Sc"`, `"So"`… |
 | `isLetter`, `isUppercase`, `isLowercase`, `isMark`, `isDigit`, `isNumber`, `isPunctuation`, `isSymbol`, `isSpace`, `isAlphanumeric` | `(_ c: Int) -> Bool`, by the Unicode properties. |
 | `caseFold(_ s: String) -> String` | The form for comparing without case: "Straße" and "STRASSE" both fold to "strasse". |
-| `sameIgnoringCase(_ a: String, _ b: String) -> Bool` | Whether the folded texts are equal. |
+| `sameIgnoringCase(_ a: String, _ b: String) -> Bool` | Whether the texts are equal apart from case, however their accents are written. |
+| `combiningClass(_ c: Int) -> Int` | The Canonical_Combining_Class: 0 for most characters, 230 for most accents above. |
 | `unicodeVersion` | `"17.0.0"`. |
+
+## Normalization
+
+The same text can be stored as different code points. For example, "é"
+can be one code point (U+00E9), or "e" followed by a combining accent
+(U+0301):
+
+```tessel
+let typed = "Cafe" + text.fromCodePoints([769])
+print(typed == "Café")              // false
+print(text.nfc(typed) == "Café")    // true
+print(text.nfkc("ﬁle №２"))          // file No2
+```
+
+`nfc` (composed: the usual form for storing text), `nfd` (decomposed),
+`nfkc` and `nfkd` follow [UAX #15](https://www.unicode.org/reports/tr15/).
+The K forms also turn ligatures, full-width letters, superscripts and the
+like into plain characters, which is useful for searching and comparing.
+All 20,034 cases of Unicode's `NormalizationTest.txt` pass, and every other
+code point is left as it is.
 
 ## Grapheme clusters, words and sentences
 
@@ -101,6 +123,41 @@ languages, give `hyphenatorFromTex` a pattern file from
 [hyph-utf8](https://github.com/hyphenation/tex-hyphen), or give `hyphenator`
 the patterns and exceptions themselves. Words containing anything other
 than letters ("don't", "3rd") aren't hyphenated.
+
+## Spelling
+
+```tessel
+var sp = text.speller(text.systemWordList(), user: "Tessel\n")
+sp.isCorrect("reinforcement")       // true
+sp.isCorrect("recieve")             // false
+for m in sp.misspellings("Teh beam was stoped by Tessel's sensor.") {
+    print("{m.word} at {m.from}-{m.to}: {sp.suggest(m.word, limit: 3)}")
+}
+// Teh at 0-3: ["The", "Ten", "Tea"]
+// stoped at 13-19: ["stopped", "stiped", "stooped"]
+let line = sp.addWord("Syncster")   // "Syncster\n": append it to the user's dictionary file
+text.autocorrect(text.autocorrectDefaults(), "Teh")   // "The"
+```
+
+A `Speller` is built from a word list with one word per line.
+`systemWordList()` reads `/usr/share/dict/words` (236,000 words, built in
+about 17 ms) and gives `""` on Windows. A word also counts as right when it
+is a listed word with a regular ending (-s, -ed, -ing, -er, -est, -ly,
+-ness, un-), following the usual spelling rules: "stopping" is right but
+"stoping" isn't, and "shelves" is right but "shelfs" isn't. Capitals,
+contractions, possessives, hyphenated words, acronyms, numbers and web
+addresses are handled too. `suggest` ranks words one or two edits away by
+how likely the slip is: swapped and doubled letters, letters left out,
+neighbouring keys and wrong vowels. It also fixes endings ("basicly" →
+"basically") and splits words run together ("alot" → "a lot").
+`addWord`, `ignoreAll`, `ignoreOnce` and `resetIgnored` work like the
+same commands in Word. `autocorrect` fixes about 140 common typing slips
+and keeps their capitals.
+
+This is the spell checker from the Quill word processor. With the system's
+list, Quill's tests flag nothing in 1,548 words of ordinary prose, and
+offer the intended word first for 42 of 42 common misspellings and 62 of
+62 harder ones. It checks words at about 4 million a second.
 
 ## Fuzzy matching
 
@@ -191,6 +248,7 @@ wrong ("created" counts as 2).
 `tessel run tests` checks:
 
 - the category of all 1,114,112 code points against `UnicodeData.txt`, and White_Space against `PropList.txt`;
+- all 20,034 cases of Unicode's `NormalizationTest.txt`, and that every other code point stays as it is;
 - case folding against `CaseFolding.txt` and Python's `str.casefold`;
 - all 3,222 cases of Unicode's `GraphemeBreakTest.txt`, `WordBreakTest.txt` and `SentenceBreakTest.txt`;
 - hyphenation of 14,000 words against [pyphen](https://pyphen.org) with the same patterns;
@@ -198,6 +256,7 @@ wrong ("created" counts as 2).
 - stems of Snowball's whole English test list (42,649 words);
 - BM25 scores of 400 queries over 300 documents against [bm25s](https://github.com/xhluca/bm25s);
 - syllable counts of 35,627 words, against the rules' first version in Python and against the CMU dictionary;
+- the spelling tests from Quill, including the system word list;
 - the rest by hand, plus speed.
 
 `tests/cases.json` is made by `tools/oracle/oracle.py`. Running it needs

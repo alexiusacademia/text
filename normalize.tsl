@@ -1,0 +1,253 @@
+// text: Unicode normalization (UAX #15), checked against Unicode's
+// NormalizationTest.txt. The same text can be written with different code
+// points: "é" as one (U+00E9) or as "e" and a combining accent (U+0065
+// U+0301). Normalizing first makes such texts equal.
+//
+// - nfc: composed, the form most text is in and the one to store.
+// - nfd: decomposed, accents apart from their letters.
+// - nfkc, nfkd: the same, also turning "compatibility" characters into
+//   plain ones: "ﬁ" into "fi", "²" into "2", full-width "Ａ" into "A",
+//   "½" into "1⁄2". For searching and comparing, not for showing.
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+// Where each entry of a "lengths then code points" table starts.
+fn entryStarts(_ to: [Int]) -> [Int] {
+    var out: [Int] = []
+    var i = 0
+    while i < to.count {
+        out.append(i)
+        i += 1 + to[i]
+    }
+    out
+}
+
+let canonStart: [Int] = entryStarts(canonTo)
+let compatStart: [Int] = entryStarts(compatTo)
+
+// The pairs that compose, as one number each (first × 2²¹ + second), in
+// order.
+let composeKeys: [Int] = composeKeyList()
+
+fn composeKeyList() -> [Int] {
+    var out: [Int] = []
+    for k in 0..composeFirst.count {
+        out.append(composeFirst[k] * 2097152 + composeSecond[k])
+    }
+    out
+}
+
+// The index of `c` in the sorted list `xs`, or -1.
+fn indexIn(_ xs: [Int], _ c: Int) -> Int {
+    var lo = 0
+    var hi = xs.count - 1
+    while lo <= hi {
+        let mid = (lo + hi) / 2
+        let v = xs[mid]
+        if v == c {
+            return mid
+        }
+        if v < c {
+            lo = mid + 1
+        } else {
+            hi = mid - 1
+        }
+    }
+    -1
+}
+
+// The Canonical_Combining_Class of c: 0 for most characters, the order
+// in which combining marks are put for the others (230 for most accents
+// above, 220 below).
+public fn combiningClass(_ c: Int) -> Int {
+    if c < 768 {
+        return 0
+    }
+    var lo = 0
+    var hi = cccStarts.count - 1
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2
+        if cccStarts[mid] <= c {
+            lo = mid
+        } else {
+            hi = mid - 1
+        }
+    }
+    cccValues[lo]
+}
+
+// Hangul syllables are made and taken apart by arithmetic.
+let hangulS = 44032
+let hangulL = 4352
+let hangulV = 4449
+let hangulT = 4519
+let hangulVCount = 21
+let hangulTCount = 28
+let hangulN = 588
+let hangulCount = 11172
+
+// Adds the full decomposition of c to `out`.
+fn decomposeInto(_ out: bind [Int], _ c: Int, _ compat: Bool) {
+    if c < 160 {
+        out.append(c)
+        return
+    }
+    if c >= hangulS && c < hangulS + hangulCount {
+        let s = c - hangulS
+        out.append(hangulL + s / hangulN)
+        out.append(hangulV + (s % hangulN) / hangulTCount)
+        let t = s % hangulTCount
+        if t != 0 {
+            out.append(hangulT + t)
+        }
+        return
+    }
+    if compat {
+        let k = indexIn(compatFrom, c)
+        if k >= 0 {
+            let at = compatStart[k]
+            for i in 0..compatTo[at] {
+                out.append(compatTo[at + 1 + i])
+            }
+            return
+        }
+    }
+    let k = indexIn(canonFrom, c)
+    if k >= 0 {
+        let at = canonStart[k]
+        for i in 0..canonTo[at] {
+            out.append(canonTo[at + 1 + i])
+        }
+        return
+    }
+    out.append(c)
+}
+
+// The code points decomposed and put in canonical order: each run of
+// combining marks sorted by class, keeping the order of marks of the same
+// class.
+fn decomposed(_ cps: [Int], _ compat: Bool) -> [Int] {
+    var out: [Int] = []
+    for c in cps {
+        decomposeInto(out, c, compat)
+    }
+    var classes: [Int] = []
+    for c in out {
+        classes.append(combiningClass(c))
+    }
+    // Insertion sort inside each run of marks: the runs are short.
+    for i in 1..out.count {
+        let cl = classes[i]
+        if cl == 0 {
+            continue
+        }
+        var j = i
+        while j > 0 && classes[j - 1] > cl {
+            let c = out[j]
+            out[j] = out[j - 1]
+            out[j - 1] = c
+            classes[j] = classes[j - 1]
+            classes[j - 1] = cl
+            j -= 1
+        }
+    }
+    out
+}
+
+// What a and b compose to, or -1.
+fn composePair(_ a: Int, _ b: Int) -> Int {
+    if a >= hangulL && a < hangulL + 19 && b >= hangulV && b < hangulV + hangulVCount {
+        return hangulS + ((a - hangulL) * hangulVCount + (b - hangulV)) * hangulTCount
+    }
+    if a >= hangulS && a < hangulS + hangulCount && (a - hangulS) % hangulTCount == 0 && b > hangulT && b < hangulT + hangulTCount {
+        return a + (b - hangulT)
+    }
+    let k = indexIn(composeKeys, a * 2097152 + b)
+    if k >= 0 { composeResult[k] } else { -1 }
+}
+
+// Decomposed code points composed again: each mark joined to the starter
+// before it when they compose and no mark of the same or a higher class
+// is between them.
+fn composed(_ cps: [Int]) -> [Int] {
+    if cps.isEmpty {
+        return cps
+    }
+    var out: [Int] = [cps[0]]
+    var starter = 0
+    var last = combiningClass(cps[0])
+    if last != 0 {
+        last = 256
+    }
+    for i in 1..cps.count {
+        let c = cps[i]
+        let cl = combiningClass(c)
+        let made = composePair(out[starter], c)
+        if made >= 0 && (last < cl || last == 0) {
+            out[starter] = made
+            continue
+        }
+        if cl == 0 {
+            starter = out.count
+        }
+        last = cl
+        out.append(c)
+    }
+    out
+}
+
+// Whether every code point of the text is below `limit`, below which
+// normalizing changes nothing.
+fn allBelow(_ text: String, _ limit: Int) -> Bool {
+    for b in Data(text: text).bytes {
+        if b >= 128 {
+            return limit > 127 && allCodesBelow(text, limit)
+        }
+    }
+    true
+}
+
+fn allCodesBelow(_ text: String, _ limit: Int) -> Bool {
+    for c in decode(text).cps {
+        if c >= limit {
+            return false
+        }
+    }
+    true
+}
+
+// `text` in Normalization Form D: decomposed.
+public fn nfd(_ text: String) -> String {
+    if allBelow(text, 192) {
+        return text
+    }
+    fromCodePoints(decomposed(decode(text).cps, false))
+}
+
+// `text` in Normalization Form C: decomposed and composed again, so
+// "e" + U+0301 becomes "é". Most text is in this form already.
+public fn nfc(_ text: String) -> String {
+    if allBelow(text, 768) {
+        return text
+    }
+    fromCodePoints(composed(decomposed(decode(text).cps, false)))
+}
+
+// `text` in Normalization Form KD: compatibility characters made plain,
+// then decomposed.
+public fn nfkd(_ text: String) -> String {
+    if allBelow(text, 160) {
+        return text
+    }
+    fromCodePoints(decomposed(decode(text).cps, true))
+}
+
+// `text` in Normalization Form KC: compatibility characters made plain,
+// then composed: nfkc("ﬁle №２") is "file No2".
+public fn nfkc(_ text: String) -> String {
+    if allBelow(text, 160) {
+        return text
+    }
+    fromCodePoints(composed(decomposed(decode(text).cps, true)))
+}

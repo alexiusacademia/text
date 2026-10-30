@@ -76,6 +76,52 @@ def main():
         fold_to.append(len(t))
         fold_to.extend(t)
 
+    # Normalization: combining classes, full decompositions and the pairs
+    # that compose.
+    data = ucd.unicode_data()
+
+    def ccc(c):
+        return data[c][0] if c in data else 0
+
+    def full(c, compat):
+        if 0xAC00 <= c <= 0xD7A3:
+            return [c]   # Hangul is decomposed by arithmetic
+        if c in data:
+            _, kind, mapping = data[c]
+            if kind == "canonical" or (compat and kind == "compat"):
+                out = []
+                for x in mapping:
+                    out.extend(full(x, compat))
+                return out
+        return [c]
+
+    ccc_starts, ccc_values = [], []
+    prev = None
+    for c in range(ucd.N):
+        v = ccc(c)
+        if v != prev:
+            ccc_starts.append(c)
+            ccc_values.append(v)
+            prev = v
+    canon_from, canon_to, compat_from, compat_to = [], [], [], []
+    for c in sorted(data):
+        d = full(c, False)
+        if d != [c]:
+            canon_from.append(c)
+            canon_to.append(len(d))
+            canon_to.extend(d)
+        k = full(c, True)
+        if k != d:
+            compat_from.append(c)
+            compat_to.append(len(k))
+            compat_to.extend(k)
+    excluded = ucd.composition_exclusions()
+    pairs = []
+    for c, (_, kind, mapping) in data.items():
+        if kind == "canonical" and len(mapping) == 2 and c not in excluded:
+            pairs.append((mapping[0], mapping[1], c))
+    pairs.sort()
+
     out = []
     out.append("""// text: the Unicode %s properties that splitting text and the character
 // functions use. Made by tools/gen/gen_tables.py from the Unicode Character
@@ -99,6 +145,25 @@ def main():
     out.append("")
     out.append(tessel_list("foldTo", ["For each of foldFrom: how many code points it folds to (1 to 3), then those."], hexes(fold_to, 6), 6))
     out.append("")
+    out.append(tessel_list("cccStarts", ["Canonical_Combining_Class: the first code point of each range (%d)." % len(ccc_starts)], hexes(ccc_starts, 6), 6))
+    out.append("")
+    out.append(tessel_list("cccValues", ["The class of each range."], hexes(ccc_values, 2), 2))
+    out.append("")
+    out.append(tessel_list("canonFrom", ["The code points with a canonical decomposition (%d), in order." % len(canon_from)], hexes(canon_from, 6), 6))
+    out.append("")
+    out.append(tessel_list("canonTo", ["For each of canonFrom: the length of its full canonical decomposition, then its code points."], hexes(canon_to, 6), 6))
+    out.append("")
+    out.append(tessel_list("compatFrom", ["The code points whose full compatibility decomposition isn't their canonical one (%d)." % len(compat_from)], hexes(compat_from, 6), 6))
+    out.append("")
+    out.append(tessel_list("compatTo", ["For each of compatFrom: the length of its full compatibility decomposition, then its code points."], hexes(compat_to, 6), 6))
+    out.append("")
+    out.append(tessel_list("composeFirst", ["The pairs that compose (%d), sorted: the first code point," % len(pairs)], hexes([p[0] for p in pairs], 6), 6))
+    out.append("")
+    out.append(tessel_list("composeSecond", ["the second,"], hexes([p[1] for p in pairs], 6), 6))
+    out.append("")
+    out.append(tessel_list("composeResult", ["and what they compose to."], hexes([p[2] for p in pairs], 6), 6))
+    out.append("")
+    print("normalization: %d ccc ranges, %d canonical, %d compatibility, %d pairs" % (len(ccc_starts), len(canon_from), len(compat_from), len(pairs)))
     path = os.path.join(ROOT, "unicode_data.tsl")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))

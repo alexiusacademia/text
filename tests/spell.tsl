@@ -1,0 +1,359 @@
+// text's spelling tests, from Quill's tests/spell_test.tsl: words right
+// and wrong with a small list, misspellings in texts, the user's words and
+// ignoring, suggestions, autocorrect, and with the system's word list
+// ordinary prose, common misspellings and speed.
+//
+// Author: Alexius Academia
+// Date: 2026-10-30
+
+import ".."
+
+// A small word list, so these checks don't depend on the system's.
+fn smallList() -> String {
+    "a\nI\nthe\nquick\nbrown\nfox\njump\nwalk\nlove\nstop\nrun\nbig\nhappy\ncity\nbox\nwatch\ngo\nmake\nlie\ntry\neasy\nbasic\nsimple\nreal\nnice\nread\nbuild\nopen\nlarge\ncat\ndog\nlot\nof\nand\nis\nLondon\nAmerican\nword\nreceive\nfriend\ntheir\nthere\nwhich\nwith\nbecause\naddress\nbook\nvisit\nsurprise\nwell\nknown\nit\nhe\nthey\nthat\nJohn\nkind\ntrue\nform\ntill\nnew\nold\nuntil\nend\nheader\nmy\nso\nsaw\nits\nknow\ntext\nhere\nnote\nwrong\nright\n"
+}
+
+// The misspelled words of a text, between bars.
+fn wrongIn(_ sp: text.Speller, _ s: String) -> String {
+    var parts: [String] = []
+    for m in sp.misspellings(s) {
+        parts.append("{m.word}@{m.from}-{m.to}")
+    }
+    parts.joined(separator: "|")
+}
+
+fn spellWords(_ sp: text.Speller) -> Int {
+    var failed = 0
+    let right = ["the", "The", "THE", "London", "LONDON", "I", "x", "Q", "fox", "Fox",
+        // endings
+        "boxes", "watches", "cities", "goes", "cats", "walked", "loved", "tried", "stopped", "walking", "making", "running", "lying",
+        "bigger", "larger", "happier", "biggest", "largest", "happiest", "nicer", "nicest", "really", "happily", "basically", "simply", "nicely",
+        "happiness", "kindness", "readers", "buildings", "lovingly", "unopened", "unkind", "Walked", "Running", "Americans",
+        // apostrophes and hyphens
+        "don't", "Don't", "can’t", "it's", "I'm", "they'd", "John's", "London's", "dog's", "cats'", "he'll", "that's", "o'clock", "well-known", "big-city",
+        // passed over
+        "abc123", "3rd", "NASA", "XKCD", "ann@example.com", "www.example.com", "https://example.com/page", "file.txt", "and/or"]
+    var bad: [String] = []
+    for w in right {
+        if !sp.isCorrect(w) { bad.append(w) }
+    }
+    failed += same("right words are right", "{bad}", "[]")
+    let wrong = ["teh", "tHe", "london", "john", "american", "recieve", "freind", "Freind", "wrod", "boxs", "citys", "stoped", "runing", "biger",
+        "truely", "untill", "happyness", "walkeded", "dont", "DOn't", "don'tt", "cat's's", "well-knwon", "catz", "thier", "Londonn", "qick"]
+    bad = []
+    for w in wrong {
+        if sp.isCorrect(w) { bad.append(w) }
+    }
+    failed += same("wrong words are wrong", "{bad}", "[]")
+    failed
+}
+
+fn spellTexts(_ sp: text.Speller) -> Int {
+    var failed = 0
+    failed += same("nothing wrong", wrongIn(sp, "The quick brown fox is happy."), "")
+    failed += same("offsets", wrongIn(sp, "Teh quick borwn fox"), "Teh@0-3|borwn@10-15")
+    failed += same("punctuation around words", wrongIn(sp, "(teh) \"fox\", the—wrod!"), "teh@1-4|wrod@17-21")
+    failed += same("an empty text", wrongIn(sp, ""), "")
+    failed += same("addresses and numbers are passed over", wrongIn(sp, "Visit www.exampel.com or ann@exampel.org, read page2 and file_nmae.txt"), "")
+    failed += same("a web address with a path", wrongIn(sp, "the https://exampel.com/abuot?x=1 book"), "")
+    failed += same("hyphenated words by part", wrongIn(sp, "a well-knwon cat"), "knwon@7-12")
+    failed += same("contractions", wrongIn(sp, "It's John’s dog, they'd love it; dont."), "dont@33-37")
+    failed += same("quotes aren't apostrophes", wrongIn(sp, "the 'fox' and 'teh'"), "teh@15-18")
+    failed += same("plural possessive", wrongIn(sp, "the dogs' book"), "")
+    failed += same("a sentence's point isn't an address", wrongIn(sp, "The cat. Teh dog."), "Teh@9-12")
+    failed += same("single letters and capitals", wrongIn(sp, "X Y NASA b teh"), "teh@11-14")
+    failed += same("a tab and a line break part words", wrongIn(sp, "teh\twrod\ncatz"), "teh@0-3|wrod@4-8|catz@9-13")
+    failed += same("a space for an object breaks a word", wrongIn(sp, "bro wn fox"), "bro@0-3|wn@4-6")
+    failed += same("offsets count code points", wrongIn(sp, "😀 é teh"), "teh@4-7")
+    failed
+}
+
+fn spellIgnoring() -> Int {
+    var failed = 0
+    var sp = text.speller(smallList(), user: "Quill\nfrobnicate\r\n\n  zork  \nthe\n")
+    failed += holds("the user's words are right", sp.isCorrect("Quill") && sp.isCorrect("frobnicate") && sp.isCorrect("zork"))
+    failed += holds("and take endings", sp.isCorrect("frobnicated") && sp.isCorrect("zorks"))
+    failed += holds("a user's name keeps its capital", !sp.isCorrect("quill"))
+    failed += same("the user's words, without what the list had", sp.userWordsText(), "Quill\nfrobnicate\nzork\n")
+    failed += same("adding a word gives the line to append", sp.addWord(" blorp "), "blorp\n")
+    failed += holds("an added word is right", sp.isCorrect("blorp") && sp.isCorrect("Blorp"))
+    failed += same("adding it again gives nothing", sp.addWord("blorp"), "")
+    failed += same("adding a listed word gives nothing", sp.addWord("fox"), "")
+    failed += same("adding nothing gives nothing", sp.addWord("  "), "")
+    failed += same("the user's words after adding", sp.userWordsText(), "Quill\nfrobnicate\nzork\nblorp\n")
+    let again = text.speller(smallList(), user: sp.userWordsText())
+    failed += holds("the file's text makes the same speller", again.words == sp.words && again.user == sp.user)
+    failed += holds("before ignoring", !sp.isCorrect("grault"))
+    sp.ignoreAll("grault")
+    failed += holds("ignore all", sp.isCorrect("grault") && sp.isCorrect("Grault"))
+    failed += same("ignored in a text", wrongIn(sp, "teh grault"), "teh@0-3")
+    sp.ignoreAll("Waldo")
+    failed += holds("ignoring a capital form keeps the small one wrong", sp.isCorrect("Waldo") && !sp.isCorrect("waldo"))
+    let line = "A catz here and a catz there, teh end"
+    let found = sp.misspellings(line)
+    failed += holds("three misspellings", found.count == 3)
+    sp.ignoreOnce(line, found[0])
+    failed += same("ignore once leaves the others", wrongIn(sp, line), "catz@18-22|teh@30-33")
+    failed += same("and survives an edit elsewhere in the text", wrongIn(sp, "A catz here and a catz there, the end!"), "catz@18-22")
+    failed += same("the same word in other text is still flagged", wrongIn(sp, "My catz here"), "catz@3-7")
+    sp.resetIgnored()
+    failed += same("rechecking forgets what was ignored", wrongIn(sp, "A catz here, grault"), "catz@2-6|grault@13-19")
+    failed += holds("but not the user's words", sp.isCorrect("blorp"))
+    failed
+}
+
+fn spellSuggestions(_ sp: text.Speller) -> Int {
+    var failed = 0
+    failed += same("nothing for a right word", "{sp.suggest("fox")}", "[]")
+    for (wrong, meant) in [("teh", "the"), ("recieve", "receive"), ("Freind", "Friend"), ("london", "London"), ("wich", "which"),
+        ("adress", "address"), ("untill", "until"), ("recieved", "received"), ("stoped", "stopped"), ("alot", "a lot"), ("dont", "don't"),
+        ("becuaes", "because"), ("suprize", "surprise")] {
+        failed += same("suggest {wrong}", sp.suggest(wrong).first ?? "", meant)
+    }
+    failed += holds("no more than asked", sp.suggest("bix", limit: 2).count <= 2)
+    failed += same("none asked", "{sp.suggest("teh", limit: 0)}", "[]")
+    failed += same("nothing near", "{sp.suggest("zzzzqqqq")}", "[]")
+    let s = sp.suggest("bix", limit: 5)
+    failed += holds("both near words are offered", s.contains("big") && s.contains("box"))
+    failed += holds("every suggestion is a right word", s.all(where: { w in sp.isCorrect(w) }))
+    failed += holds("no suggestion twice", s.unique().count == s.count)
+    failed
+}
+
+fn spellAutocorrect(_ sp: text.Speller) -> Int {
+    var failed = 0
+    let table = text.autocorrectDefaults()
+    failed += holds("a hundred or more entries", table.count >= 100)
+    for (typed, fixed) in [("teh", "the"), ("adn", "and"), ("recieve", "receive"), ("Teh", "The"), ("TEH", "THE"), ("tEh", "-"), ("the", "-"),
+        ("", "-"), ("i", "I"), ("I", "-"), ("dont", "don't"), ("Dont", "Don't"), ("alot", "a lot"), ("im", "I'm")] {
+        failed += same("autocorrect \"{typed}\"", text.autocorrect(table, typed) ?? "-", fixed)
+    }
+    var mine = table
+    mine["quil"] = "Quill"
+    mine["teh"] = nil
+    failed += same("the table can be added to", text.autocorrect(mine, "quil") ?? "-", "Quill")
+    failed += same("and taken from", text.autocorrect(mine, "teh") ?? "-", "-")
+    let full = text.speller(smallList() + text.systemWordList())
+    let checker = if full.words.count > 10000 { full } else { sp }
+    var keyRight = ""
+    var answerWrong = ""
+    for key in table.keys {
+        if key != "i" && checker.isCorrect(key) { keyRight += key + " " }
+        if full.words.count > 10000 {
+            for part in (table[key] ?? "").split(" ") {
+                if !full.isCorrect(part) { answerWrong += part + " " }
+            }
+        }
+    }
+    failed += same("no key is a word", keyRight, "")
+    failed += same("every answer is spelled right", answerWrong, "")
+    failed
+}
+
+// Ordinary prose: none of it may be flagged.
+fn prose() -> [String] {
+    [
+        "When the rain finally stopped, the children ran outside and started jumping in the puddles. Their mother watched them from the kitchen window, smiling quietly as she finished washing the dishes. It wasn't the warmest afternoon of the year, but nobody seemed to mind. The youngest boy, who had just turned six, was easily the loudest of them all. He kept shouting that his boots were the biggest and the best, and that he could splash higher than anyone else.",
+        "Later that evening the family sat together at the long wooden table. Their father had cooked a simple dinner of roasted chicken, boiled potatoes and fresh green beans. Everyone was hungrier than usual, and the plates were emptied quickly. \"That's the tastiest meal we've had all week,\" said the eldest daughter, reaching for a second helping. Her brother agreed, although he was mostly interested in what they'd be having for dessert.",
+        "The town's old library opens at nine o'clock every morning except Sunday. Many visitors come to borrow books, read the newspapers or simply enjoy the quiet rooms. The librarians are friendly and helpful; they've organized reading groups for teenagers and story hours for smaller children. Last year the building was carefully repaired, and the roof no longer leaks during heavy storms. A well-known writer from London visited in March and spoke about her latest novel to a crowded hall.",
+        "Mr. Brown's bakery is on the corner of the busiest street. People queue there from early in the morning, hoping to buy warm bread, sweet rolls and his famous apple pies. He's been baking for nearly thirty years, and he says he still learns something new every day. His daughter Sarah helps on Saturdays, serving customers and wrapping their orders in brown paper. She's saving her wages for a trip to Paris next summer.",
+        "Writing a clear report takes patience. Begin by collecting the facts, then arrange them in a sensible order. Short sentences are usually easier to follow than long ones, and plain words are stronger than fancy ones. Check your figures twice, because readers quickly lose trust when numbers don't add up. Finally, ask a colleague to look over the draft; a second pair of eyes often catches mistakes you've missed. Don't worry if the first version isn't perfect: rewriting is a normal part of the work.",
+        "On Monday the engineers inspected the bridge and measured the cracks along its northern side. They concluded that the damage was smaller than expected, though several bolts needed replacing. The repairs will be completed before the end of October, weather permitting. Meanwhile, heavier trucks are being directed along the river road, which adds roughly twenty minutes to the journey. Drivers have been surprisingly understanding, and the city's traffic office has received very few complaints.",
+        "The garden behind our house was neglected for years. We've spent the spring clearing weeds, trimming hedges and planting vegetables in tidy rows. Tomatoes, carrots, onions and peppers are growing nicely, and the strawberries are almost ripe. My grandmother, who's eighty-two, gives us her advice freely: water in the evening, never at noon, and always talk kindly to the seedlings. Whether or not the talking helps, her own garden has always been the prettiest in the neighborhood.",
+        "Our company's new office is brighter and more comfortable than the previous one. Each team has its own meeting room, and there are quieter corners for people who prefer working alone. The managers have promised faster computers, better coffee and flexible hours. Employees who cycle to work can store their bicycles safely in the basement. It's a long-term investment, and most of us believe it will make our days happier and our projects more successful.",
+        "Students often ask how they should prepare for examinations. The honest answer is that steady habits matter more than last-minute effort. Reviewing notes daily, solving practice problems and explaining ideas to classmates all help the material stick. Sleeping well is equally important; tired minds forget things faster. Teachers at Lincoln High have noticed that pupils who planned their weeks carefully scored higher, worried less and enjoyed their studies more.",
+        "The ship sailed slowly out of the harbor as the sun was setting. Passengers crowded the upper deck, waving to relatives who were standing on the pier. A cool breeze carried the smell of salt and the cries of hungry gulls. Captain Edwards, the oldest officer aboard, had crossed the Atlantic dozens of times, yet he admitted that leaving port still thrilled him. By midnight the lights of the coast had disappeared, and the travelers were sleeping soundly in their cabins.",
+        "Thank you for your letter of the fifteenth. We're sorry that the chairs you ordered arrived damaged, and we fully understand your disappointment. Replacements were shipped this morning and should reach you within five working days. You needn't return the broken items; our driver will collect them when he delivers the new ones. As an apology, we've refunded the delivery charge and included a small gift. Please don't hesitate to contact us if anything else is unsatisfactory.",
+        // Two longer pieces on other subjects: baking, and the history
+        // of telescopes.
+        "Baking bread at home is simpler than most people imagine, though it rewards patience more than hurry. Start with four cups of strong flour, a spoonful of salt, a little yeast and enough warm water to bring everything together. Mix the dough in a wide bowl until no dry patches remain, then turn it onto a floured table and knead it for ten minutes, pushing with the heel of your hand and folding it back on itself. At first it sticks to your fingers and tears easily; gradually it becomes smooth, springy and almost silky. Cover the bowl with a damp cloth and leave it somewhere warm until the dough has doubled in size, which usually takes an hour or two depending on the weather. Press the air out gently, shape the loaf, and let it rise again while the oven heats. A sharp knife drawn quickly across the top lets the crust open neatly instead of splitting wherever it pleases. Bake it on the middle shelf until the bottom sounds hollow when tapped, roughly forty minutes. The hardest part comes next: waiting. Bread cut straight from the oven is gummy inside, because the crumb is still setting, so give it at least half an hour on a wire rack. Beginners often complain that their first loaves are heavy, pale or oddly shaped. Usually the dough was too dry, the kitchen too cold, or the baker too impatient. None of these mistakes is serious, and even a clumsy loaf tastes wonderful with butter while it is still slightly warm. After three or four attempts your hands begin to recognize when the dough feels right, and you stop measuring so anxiously. From there it is a short step to trying darker flours, adding seeds, olives or herbs, and planning your weekends around a bubbling jar of starter that needs feeding, like a small and undemanding pet. Neighbors who once smiled politely at the hobby soon start dropping hints, and the baker who began with a single modest loaf ends up kneading twice as much dough and giving half of it away.",
+        "For most of history, people who studied the night sky had nothing better than their own eyes. They mapped the stars patiently, named the brightest ones, and noticed that five wandering lights followed paths of their own. Everything changed in the early seventeenth century, when lens grinders in the Netherlands discovered that two pieces of curved glass, held at the proper distance, made distant objects appear nearer. Within a year an Italian professor had built his own instrument and pointed it upward. What he saw astonished him: mountains and craters on the Moon, four small moons circling Jupiter, and countless faint stars that nobody had ever recorded. Later observers swapped lenses for mirrors, which could be made far larger without sagging under their own weight, and the reach of telescopes grew with every generation. By the nineteenth century astronomers were photographing the heavens, letting a glass plate gather light for hours and revealing details too dim for any human eye. They learned to split starlight into its colors and, from the dark lines crossing that rainbow, to work out what the stars are made of. The twentieth century brought bigger surprises. Careful measurements showed that the cloudy patches once thought to be nearby gas were in fact other galaxies, each containing billions of suns, and that nearly all of them are rushing away from us. The universe, it turned out, is expanding. Today the largest instruments sit on dry mountaintops in Chile and Hawaii, where the air is thin and steady, and several others orbit above the atmosphere altogether. They are operated by teams of engineers and scientists spread across many countries, and the pictures they return are shared freely with anyone who is curious. A patient amateur with a modest telescope in the garden can still contribute, spotting comets, tracking variable stars and timing the moments when a planet slips in front of a distant sun. The sky belongs to everybody, and on a clear, moonless night, far from the glare of streetlights, it remains as humbling as it was for the first people who looked up and wondered what all those lights could be."
+    ]
+}
+
+// Common misspellings with the word meant, in pairs.
+fn slips() -> [String] {
+    ["recieve", "receive", "definately", "definitely", "seperate", "separate", "occured", "occurred", "untill", "until", "accomodate", "accommodate",
+     "wich", "which", "becuase", "because", "freind", "friend", "tommorow", "tomorrow", "adress", "address", "goverment", "government",
+     "beleive", "believe", "calender", "calendar", "begining", "beginning", "buisness", "business", "enviroment", "environment",
+     "experiance", "experience", "foriegn", "foreign", "grammer", "grammar", "happend", "happened", "immediatly", "immediately",
+     "independant", "independent", "intresting", "interesting", "knowlege", "knowledge", "libary", "library", "neccessary", "necessary",
+     "occassion", "occasion", "posible", "possible", "probaly", "probably", "realy", "really", "remeber", "remember", "resturant", "restaurant",
+     "sentance", "sentence", "similiar", "similar", "suprise", "surprise", "truely", "truly", "wierd", "weird", "writting", "writing",
+     "diffrent", "different", "togehter", "together", "beatiful", "beautiful"]
+}
+
+// More misspellings with the word that should be offered first, in
+// pairs: letters left out, swapped and doubled, the wrong vowel, and
+// endings put on wrongly.
+fn firstOffers() -> [String] {
+    ["lettr", "letter", "wrold", "world", "thnak", "thank", "mispell", "misspell", "hapy", "happy", "frend", "friend", "acheive", "achieve",
+     "arguement", "argument", "basicly", "basically", "beleif", "belief", "collegue", "colleague", "comittee", "committee", "concious", "conscious",
+     "definate", "definite", "dissapoint", "disappoint", "embarass", "embarrass", "excelent", "excellent", "existance", "existence",
+     "familar", "familiar", "febuary", "February", "fourty", "forty", "gaurd", "guard", "hieght", "height", "lenght", "length", "liason", "liaison",
+     "medecine", "medicine", "neice", "niece", "noticable", "noticeable", "occurence", "occurrence", "peice", "piece", "persue", "pursue",
+     "posession", "possession", "recomend", "recommend", "relevent", "relevant", "rythm", "rhythm", "sieze", "seize", "succesful", "successful",
+     "tounge", "tongue", "vaccum", "vacuum", "yeild", "yield", "writen", "written", "thier", "their", "tommorrow", "tomorrow", "speach", "speech",
+     "sincerly", "sincerely", "seperately", "separately", "runing", "running", "stoping", "stopping", "shelfs", "shelves", "hapened", "happened",
+     "quikly", "quickly", "langauge", "language", "importent", "important", "diferent", "different", "probem", "problem", "peple", "people",
+     "somthing", "something", "allways", "always", "recieving", "receiving", "huging", "hugging", "wifes", "wives", "begining", "beginning"]
+}
+
+// Endings put on wrongly that the rules for endings must not let
+// through: a consonant that has to be doubled and isn't, one doubled
+// that mustn't be, and -fs for -ves.
+fn endingSlips() -> [String] {
+    ["runing", "cuting", "huging", "huged", "noding", "poping", "triping", "spining", "quiting", "quited", "thining", "thiner", "runer", "sliping", "snaping", "swaping", "ploting",
+     "tiping", "toping", "fliping", "wining", "squating", "quiping", "formating", "formated", "occuring", "refering", "exceling", "expeled", "patroling", "incuring",
+     "recuring", "transmiting", "acquited", "regreted", "overlaping", "unpluged", "openning", "visitted", "happenning", "listenning", "helpping", "feelling",
+     "offerring", "enterred", "gatherring", "developped", "budgetted", "shelfs", "halfs", "wifes", "lifes", "thiefs", "selfs", "elfs", "calfs", "bookshelfs", "housewifes"]
+}
+
+// And the right forms beside them, which must stay right.
+fn endingsRight() -> [String] {
+    ["running", "cutting", "hugging", "hugged", "nodding", "popping", "tripping", "spinning", "quitting", "thinning", "thinner", "runner", "slipping", "snapping", "swapping",
+     "plotting", "tipping", "topping", "flipping", "winning", "robbing", "squatting", "formatting", "formatted", "occurring", "referring", "excelling", "expelled",
+     "patrolling", "incurring", "recurring", "transmitting", "acquitted", "regretted", "overlapping", "unplugged", "kidnapper", "kidnapped", "opening", "visited",
+     "happening", "listening", "helping", "reading", "offering", "entered", "gathering", "developed", "budgeted", "shelves", "halves", "wives", "lives", "thieves",
+     "selves", "elves", "calves", "bookshelves", "housewives", "loaves", "hooves", "scarves", "knives", "leaves", "wolves", "roofs", "beliefs", "chiefs", "cliffs", "proofs",
+     // an -e word's own endings, where the word without the e is one too
+     "hoping", "hoped", "taping", "pining", "planed", "staring", "stared", "scared", "caring", "cared", "curing", "firing", "hired", "timing", "noting", "noted",
+     "voting", "using", "used", "making", "riding", "biting", "writing", "dining", "hating", "rated", "mating", "caned", "wined", "robed", "caped", "cuter", "cutest",
+     "huger", "riper", "sager", "paned", "sloping", "striped", "scraping", "griping", "moping", "shining", "lined", "mined", "tuned", "toned", "waging", "staged", "raging",
+     "sited", "biding", "baring", "bared", "paring", "wading", "fading", "siring", "shaming", "sparing", "sniping", "piping", "twining", "priming", "grading", "gaping",
+     // doubled where it is right
+     "travelling", "cancelled", "labelled", "modelling", "controlled", "compelled", "fulfilled", "dialling", "fuelled", "equalled", "quizzed", "quizzes", "equipped",
+     "worshipped", "programmed", "focussed", "benefitted", "zigzagged", "eavesdropping", "sidestepped", "babysitting", "beginning", "beginner", "forgetting", "upsetting",
+     "inputting", "outwitted", "overrunning", "admitted", "committed", "permitted", "submitted", "omitted", "preferred", "transferred", "deferred", "conferred", "inferred",
+     "deterred", "rebelled", "propelling", "repelled", "enrolled", "diagrammed", "handicapped", "bigger", "biggest", "hotter", "saddest", "stopper", "swimmer", "shopper"]
+}
+
+fn spellMs(_ seconds: Float) -> String {
+    (seconds * 1000.0).formatted(decimals: 1) + " ms"
+}
+
+fn spellSystem() -> Int {
+    let list = text.systemWordList()
+    if list.count < 100000 {
+        print("no /usr/share/dict/words here: the checks with the system's list are skipped")
+        return 0
+    }
+    var failed = 0
+    var t0 = now()
+    let sp = text.speller(list)
+    let build = now() - t0
+    failed += holds("a speller from {list.lines().count} words in {spellMs(build)}", build < 1.0)
+
+    var flagged: [String] = []
+    var wordCount = 0
+    for line in prose() {
+        wordCount += line.words().count
+        for m in sp.misspellings(line) {
+            flagged.append(m.word)
+        }
+    }
+    failed += same("ordinary prose ({wordCount} words) isn't flagged", "{flagged}", "[]")
+
+    let pairs = slips()
+    var missed: [String] = []
+    var top1 = 0
+    var top5 = 0
+    var slowest = 0.0
+    var total = 0.0
+    for i in 0..(pairs.count / 2) {
+        let wrong = pairs[i * 2]
+        let meant = pairs[i * 2 + 1]
+        if sp.isCorrect(wrong) { missed.append(wrong) }
+        if !sp.isCorrect(meant) { missed.append(meant + "?") }
+        t0 = now()
+        let offers = sp.suggest(wrong, limit: 5)
+        let took = now() - t0
+        total += took
+        slowest = max(slowest, took)
+        if (offers.first ?? "") == meant { top1 += 1 }
+        if offers.contains(meant) { top5 += 1 }
+    }
+    let n = pairs.count / 2
+    failed += same("every misspelling is flagged", "{missed}", "[]")
+    failed += holds("the word meant is offered for {top5} of {n} misspellings", top5 >= n - 3)
+    failed += holds("and comes first for {top1}", top1 >= n * 3 / 4)
+    failed += holds("suggesting takes {spellMs(total / Float(n))} on average, {spellMs(slowest)} at most", slowest < 0.1)
+
+    let firsts = firstOffers()
+    var firstRight = 0
+    var firstWrong: [String] = []
+    for i in 0..(firsts.count / 2) {
+        let wrong = firsts[i * 2]
+        let meant = firsts[i * 2 + 1]
+        if sp.isCorrect(wrong) {
+            firstWrong.append("{wrong} (not flagged)")
+            continue
+        }
+        let offers = sp.suggest(wrong, limit: 5)
+        if (offers.first ?? "") == meant {
+            firstRight += 1
+        } else {
+            firstWrong.append("{wrong}: {offers.prefix(3).joined(separator: ", ")}")
+        }
+    }
+    failed += holds("the first suggestion is right for {firstRight} of {firsts.count / 2}; not for {firstWrong}", firstRight >= firsts.count / 2 - 6)
+    failed += same("lettr", sp.suggest("lettr").first ?? "", "letter")
+    failed += same("ovr is over before or", sp.suggest("ovr").prefix(2).joined(separator: " "), "over or")
+    failed += same("persue is pursue before peruse", sp.suggest("persue").prefix(2).joined(separator: " "), "pursue peruse")
+
+    var passed: [String] = []
+    for w in endingSlips() {
+        if sp.isCorrect(w) { passed.append(w) }
+    }
+    failed += same("wrong endings are flagged", "{passed}", "[]")
+    var refused: [String] = []
+    for w in endingsRight() {
+        if !sp.isCorrect(w) { refused.append(w) }
+    }
+    failed += same("right endings aren't", "{refused}", "[]")
+
+    var many: [String] = []
+    var plain: [String] = []
+    for line in prose() {
+        plain += line.replace(",", with: "").replace(".", with: "").replace(";", with: "").replace(":", with: "").replace("\"", with: "").words()
+    }
+    while many.count < 200000 {
+        many += plain
+    }
+    t0 = now()
+    var right = 0
+    for w in many {
+        if sp.isCorrect(w) { right += 1 }
+    }
+    var took = now() - t0
+    failed += holds("{many.count} words checked one by one at {Int(Float(many.count) / took)} a second", Float(many.count) / took >= 100000.0 && right == many.count)
+    t0 = now()
+    var found = 0
+    for _ in 0..40 {
+        for line in prose() {
+            found += sp.misspellings(line).count
+        }
+    }
+    took = now() - t0
+    failed += holds("texts checked at {Int(Float(wordCount * 40) / took)} words a second", Float(wordCount * 40) / took >= 100000.0 && found == 0)
+
+    for w in ["has", "does", "boxes", "cities", "houses", "walked", "London", "England", "email", "online", "website", "okay", "it's", "don't", "children's", "twenty-one", "co-operate", "Mr", "I'm"] {
+        if !sp.isCorrect(w) { failed += holds("'{w}' is right with the system's list", false) }
+    }
+    for w in ["dont", "thats", "untill", "sence", "occured", "begining", "truely", "london", "england", "recieved", "wierdly", "freinds"] {
+        if sp.isCorrect(w) { failed += holds("'{w}' is wrong with the system's list", false) }
+    }
+    failed += same("received", sp.suggest("recieved").first ?? "", "received")
+    failed
+}
+
+fn spellTests() -> Int {
+    let sp = text.speller(smallList())
+    var failed = spellWords(sp)
+    failed += spellTexts(sp)
+    failed += spellIgnoring()
+    failed += spellSuggestions(sp)
+    failed += spellAutocorrect(sp)
+    failed += spellSystem()
+    failed
+}

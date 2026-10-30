@@ -68,3 +68,34 @@ def case_folding():
         if v[0] in ("C", "F"):
             out[a] = [int(x, 16) for x in v[1].split()]
     return out
+
+
+def unicode_data():
+    """For each code point in UnicodeData.txt: (combining class, decomposition
+    type or None, decomposition mapping)."""
+    out = {}
+    for line in open(os.path.join(UCD, "UnicodeData.txt"), encoding="utf-8"):
+        f = line.split(";")
+        c = int(f[0], 16)
+        ccc = int(f[3])
+        d = f[5].strip()
+        kind, mapping = None, []
+        if d:
+            parts = d.split()
+            if parts[0].startswith("<"):
+                kind = "compat"
+                parts = parts[1:]
+            else:
+                kind = "canonical"
+            mapping = [int(x, 16) for x in parts]
+        if ccc or kind:
+            out[c] = (ccc, kind, mapping)
+    return out
+
+
+def composition_exclusions():
+    out = set()
+    for a, b, v in ranges("DerivedNormalizationProps.txt"):
+        if v[0] == "Full_Composition_Exclusion":
+            out.update(range(a, b + 1))
+    return out

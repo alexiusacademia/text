@@ -282,17 +282,7 @@ fn foldOf(_ c: Int) -> [Int] {
 }
 
 // Where each entry of foldFrom starts in foldTo.
-let foldStart: [Int] = foldStarts()
-
-fn foldStarts() -> [Int] {
-    var out: [Int] = []
-    var i = 0
-    while i < foldTo.count {
-        out.append(i)
-        i += 1 + foldTo[i]
-    }
-    out
-}
+let foldStart: [Int] = entryStarts(foldTo)
 
 // `text` case folded: the form Unicode gives for comparing texts without
 // regard to case ("Straße", "STRASSE" and "strasse" all fold to "strasse";
@@ -319,7 +309,9 @@ public fn caseFold(_ text: String) -> String {
     Data(bytes: bytes).text ?? text
 }
 
-// Whether `a` and `b` are the same text apart from case.
+// Whether `a` and `b` are the same text apart from case, however their
+// accents are written (Unicode's canonical caseless match: each
+// decomposed, folded and decomposed again).
 public fn sameIgnoringCase(_ a: String, _ b: String) -> Bool {
-    a == b || caseFold(a) == caseFold(b)
+    a == b || nfd(caseFold(nfd(a))) == nfd(caseFold(nfd(b)))
 }

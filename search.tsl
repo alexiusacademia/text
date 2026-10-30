@@ -4,13 +4,18 @@
 // for more the fewer documents have it, and a document scores higher the
 // more often it has the word, less so the longer the document is.
 //
-// Words are found with `words`, case folded, stopwords ("the", "of",
-// "is"…) left out, and stemmed (`stem`), so "Beams" finds "beam" and
-// "beaming". Scores are the same as Python's bm25s with method "lucene"
+// Words are found with `words`, normalized (NFKC) and case folded,
+// stopwords ("the", "of", "is"…) left out, and stemmed (`stem`), so
+// "Beams" finds "beam" and "beaming", and "ﬁle" finds "file". Scores are the same as Python's bm25s with method "lucene"
 // gives (checked on 300 documents and 400 queries).
 //
 // Author: Alexius Academia
 // Date: 2026-10-30
+
+// A word as it is looked up: NFKC, case folded, with a plain apostrophe.
+fn searchForm(_ w: String) -> String {
+    caseFold(nfkc(w)).replace("’", with: "'")
+}
 
 // A document found by `search`: its number (0 for the first one added,
 // and so on) and its score, higher for better.
@@ -55,12 +60,12 @@ public struct SearchIndex {
         lengths.count
     }
 
-    // The terms `text` is indexed by, in order: its words, case folded,
-    // without stopwords, stemmed.
+    // The terms `text` is indexed by, in order: its words, normalized and
+    // case folded, without stopwords, stemmed.
     fn termsOf(_ text: String) -> [String] {
         var out: [String] = []
         for w in words(text) {
-            let f = caseFold(w).replace("’", with: "'")
+            let f = searchForm(w)
             if stopwords.contains(f) {
                 continue
             }
@@ -132,7 +137,7 @@ public struct SearchIndex {
         if prefix && parts.count % 2 == 1 && trimmed.count == query.count {
             let ws = words(parts[parts.count - 1])
             if let last = ws.last {
-                let f = caseFold(last).replace("’", with: "'")
+                let f = searchForm(last)
                 partial.append(f)
                 if stemming {
                     partial.append(stem(f))

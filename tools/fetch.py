@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 UNICODE = "https://www.unicode.org/Public/17.0.0/ucd/"
 FILES = {
     "ucd": [UNICODE + p for p in [
-        "UnicodeData.txt", "CaseFolding.txt", "PropList.txt", "DerivedCoreProperties.txt",
+        "UnicodeData.txt", "CaseFolding.txt", "NormalizationTest.txt", "DerivedNormalizationProps.txt", "PropList.txt", "DerivedCoreProperties.txt",
         "extracted/DerivedGeneralCategory.txt", "emoji/emoji-data.txt",
         "auxiliary/GraphemeBreakProperty.txt", "auxiliary/WordBreakProperty.txt",
         "auxiliary/SentenceBreakProperty.txt", "auxiliary/GraphemeBreakTest.txt",

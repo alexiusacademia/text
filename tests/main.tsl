@@ -64,6 +64,11 @@ struct SyllableCases {
     cmu: [Int]
 }
 
+struct NormCases {
+    cases: [[String]]
+    changed: [Int]
+}
+
 struct Cases {
     categories: [CategoryRun]
     spaces: [Int]
@@ -75,6 +80,7 @@ struct Cases {
     hyphensShort: [HyphenCase]
     distances: [DistanceCase]
     stems: StemCases
+    normalization: NormCases
     search: SearchCases
     syllables: SyllableCases
 }
@@ -280,6 +286,48 @@ fn oracle() -> Result<Int> {
     }
     failed += summary("stem (Snowball's list)", cases.stems.words.count, wrong)
 
+    // Normalization: c2 == NFC(c1) == NFC(c2) == NFC(c3), c4 == NFC(c4) ==
+    // NFC(c5), c3 == NFD(c1..c3), c5 == NFD(c4..c5), c4 == NFKC(c1..c5),
+    // c5 == NFKD(c1..c5).
+    wrong = 0
+    for c in cases.normalization.cases {
+        var ok = true
+        for k in 0..3 {
+            ok = ok && text.nfc(c[k]) == c[1] && text.nfd(c[k]) == c[2]
+        }
+        for k in 3..5 {
+            ok = ok && text.nfc(c[k]) == c[3] && text.nfd(c[k]) == c[4]
+        }
+        for k in 0..5 {
+            ok = ok && text.nfkc(c[k]) == c[3] && text.nfkd(c[k]) == c[4]
+        }
+        if !ok {
+            wrong += 1
+            if wrong <= 5 {
+                print("  normalizing {shown(c[0])}: NFC {shown(text.nfc(c[0]))}, NFD {shown(text.nfd(c[0]))}, NFKC {shown(text.nfkc(c[0]))}, NFKD {shown(text.nfkd(c[0]))}; expected {shown(c[1])}, {shown(c[2])}, {shown(c[3])}, {shown(c[4])}")
+            }
+        }
+    }
+    failed += summary("normalization (Unicode's NormalizationTest.txt)", cases.normalization.cases.count, wrong)
+    var changed: Set<Int> = []
+    for c in cases.normalization.changed {
+        changed.insert(c)
+    }
+    wrong = 0
+    for c in 0..1114112 {
+        if (c >= 55296 && c <= 57343) || changed.contains(c) {
+            continue
+        }
+        let s = text.fromCodePoints([c])
+        if text.nfd(s) != s || text.nfkd(s) != s || text.nfc(s) != s || text.nfkc(s) != s {
+            wrong += 1
+            if wrong <= 5 {
+                print("  U+{hexOf(c)} changed by normalizing")
+            }
+        }
+    }
+    failed += summary("every other code point stays as it is", 1114112 - 2048 - changed.count, wrong)
+
     var index = text.SearchIndex()
     for d in cases.search.documents {
         let ignored = index.addTerms(d)
@@ -350,6 +398,14 @@ fn byHand() -> Int {
     failed += holds("isPunctuation / isSymbol / isMark", text.isPunctuation(text.codePoint("¿")) && text.isSymbol(text.codePoint("€")) && text.isMark(769))
     failed += holds("sameIgnoringCase", text.sameIgnoringCase("STRASSE", "straße") && !text.sameIgnoringCase("a", "b"))
     failed += same("unicodeVersion", text.unicodeVersion, "17.0.0")
+    let acute = text.fromCodePoints([769])
+    failed += holds("nfc and nfd", text.nfc("e" + acute) == "é" && text.nfd("é") == "e" + acute && text.nfc("plain") == "plain")
+    failed += same("nfkc", text.nfkc("ﬁle №２ ½"), "file No2 1⁄2")
+    failed += holds("nfkd of a ligature", text.nfkd("ﬃ") == "ffi")
+    failed += holds("Hangul", text.codePoints(text.nfd("한")) == [4370, 4449, 4523] && text.nfc(text.nfd("한국어")) == "한국어")
+    failed += holds("combiningClass", text.combiningClass(769) == 230 && text.combiningClass(803) == 220 && text.combiningClass(97) == 0)
+    failed += holds("marks are put in order", text.nfd("a" + text.fromCodePoints([769, 803])) == "a" + text.fromCodePoints([803, 769]))
+    failed += holds("sameIgnoringCase however accents are written", text.sameIgnoringCase("CAFE" + acute, "café"))
 
     // Grapheme clusters.
     let accent = "e" + text.fromCodePoints([769])
@@ -447,6 +503,8 @@ fn byHand() -> Int {
     failed += holds("search limit", help.search("bending moment", limit: 1).count == 1)
     var exact = text.SearchIndex(stemming: false, stopwords: [])
     let e0 = exact.add("the beams")
+    let e5 = help.add("A ﬁle about Café design")
+    failed += holds("search normalizes", help.search("file cafe" + acute).count == 1 && help.search("CAFÉ")[0].document == e5)
     failed += holds("without stemming or stopwords", exact.search("beam").isEmpty && exact.search("the").count == 1 && e0 == 0)
     failed += holds("an empty index", text.SearchIndex().search("x").isEmpty)
 
@@ -496,6 +554,7 @@ fn speed() -> Int {
 fn main() {
     var failed = try oracle()
     failed += byHand()
+    failed += spellTests()
     failed += speed()
     if failed > 0 {
         print("\n{failed} failed")
